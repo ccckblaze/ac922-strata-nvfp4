@@ -24,10 +24,64 @@ PIDF=${PIDF:-/tmp/strata-nvfp4-run.pid}
 NUMABIND_SO=${NUMABIND_SO:-$AC922_ROOT/numabind.so}
 PLE_PARK=${PLE_PARK:-$HERE/ple_park.sh}
 mkdir -p "$LOGD"
+descendants(){ # recursive child list of a pid (same helper devlane.sh uses, so both lanes are symmetric)
+  local p kids
+  for p in "$@"; do
+    kids=$(pgrep -P "$p" 2>/dev/null || true)
+    [ -n "$kids" ] && { echo $kids; descendants $kids; }
+  done
+}
+own_pids(){
+  [ -f "$PIDF" ] || return 0
+  local root; root=$(cat "$PIDF" 2>/dev/null) || return 0
+  [ -n "$root" ] || return 0
+  echo "$root $(descendants "$root" | tr '\n' ' ')"
+}
+check(){ # refuse to share cards: report any compute context on $GPUS that this lane does not own
+  /usr/bin/python3.11 - "${GPUS:-0,1,2,3,4,5}" "$(own_pids)" <<'PY'
+import os, subprocess, sys
+want=[x.strip() for x in sys.argv[1].split(",") if x.strip()!=""]
+own={int(p) for p in sys.argv[2].split()}
+uu={}
+for l in subprocess.check_output(["nvidia-smi","--query-gpu=index,uuid","--format=csv,noheader"],text=True).splitlines():
+    i,u=[s.strip() for s in l.split(",",1)]; uu[u]=i
+busy={}
+for l in subprocess.check_output(["nvidia-smi","--query-compute-apps=gpu_uuid,pid,used_memory","--format=csv,noheader"],text=True).splitlines():
+    u,p,mem=[s.strip() for s in l.split(",",2)]
+    if uu.get(u) in want and int(p) not in own:
+        try: os.kill(int(p),0)          # a context the driver still lists for a dying process is free
+        except OSError: continue
+        busy.setdefault(uu[u],[]).append((int(p),mem))
+print(("cards busy: "+", ".join("%s<-%s>"%(k,v) for k,v in sorted(busy.items()))) if busy else "cards clear")
+sys.exit(1 if busy else 0)
+PY
+}
 stop(){
-  if [ -f "$PIDF" ]; then kill "$(cat $PIDF)" 2>/dev/null; fi
-  pkill -f "strata-nvfp4.run.json" 2>/dev/null
-  sleep 2; pkill -f "build/strata --serve" 2>/dev/null
+  # Lane-scoped shutdown, pidfile tree only.  The old broad `pkill -f "build/strata --serve"` also
+  # killed the dev lane's engine: measured 2026-11-16, a production `stop` took out the 8092 engine
+  # while its supervisor stayed alive and went on answering /health 200 with nothing behind it.
+  local pids p alive eng
+  pids="$(own_pids)"
+  if [ -n "${pids// /}" ]; then
+    eng=""
+    for p in $pids; do tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | grep -q "build/strata --serve" && eng="$eng $p"; done
+    echo "stopping lane tree: $pids"; kill $pids 2>/dev/null || true
+    sleep 3
+    alive=""
+    for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+    [ -n "$alive" ] && { echo "forcing:$alive"; kill -9 $alive 2>/dev/null || true; }
+    # A killed engine keeps its VRAM for a few seconds.  A `start` issued inside that window sees its
+    # own dead process as a foreign occupant and the guard above refuses it, so wait for release.
+    if [ -n "$eng" ]; then
+      for _ in $(seq 1 45); do
+        live=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d " ")
+        hit=0; for p in $eng; do echo "$live" | grep -qx "$p" && hit=1; done
+        [ "$hit" = 0 ] && break; sleep 2
+      done
+      echo "lane contexts released"
+    fi
+  fi
+  pkill -f -- "$RUN" 2>/dev/null   # stale-pidfile fallback; $RUN is this lane's own config path
   rm -f "$PIDF"; echo stopped
 }
 start(){
@@ -38,6 +92,12 @@ start(){
   GPUS=${GPUS:-0,1,2,3,4,5}
   export CUDA_VISIBLE_DEVICES="$GPUS"
   export NB_CUT=${NB_CUT:-0.5}
+  # The default geometry is 6-card, so a bare `start` on a box whose 4/5 cards belong to the dev lane
+  # (or to a cooperating thread) used to silently straddle all six.  Refuse unless the cards are free.
+  if [ "${FORCE:-0}" != 1 ]; then
+    occ=$(check 2>&1) || { echo "REFUSING to start: $occ"; echo "Free GPUS=$GPUS, or pass FORCE=1 to override."; exit 1; }
+    echo "check: $occ"
+  fi
   # >>> AC922 adopted env (DECISIONS.md: T10 NUMA bind) >>>
   # expert-arena NUMA placement via mmap hook: arena[0, NB_CUT)->node0 island, rest->node8 island.
   if [ -f "$NUMABIND_SO" ]; then export LD_PRELOAD="$NUMABIND_SO"; fi
@@ -102,8 +162,9 @@ PY
 }
 status(){
   echo "== server pid =="; [ -f "$PIDF" ] && cat "$PIDF" && ps -o pid,etime,rss,cmd -p "$(cat $PIDF)" 2>/dev/null | tail -1
-  echo "== engine =="; pgrep -af "build/strata --serve" | head -1
-  echo "== health =="; curl -s -m5 http://127.0.0.1:8091/health; echo
+  echo "== engine =="; for e in $(own_pids); do tr '\0' ' ' < /proc/$e/cmdline 2>/dev/null | grep -q "build/strata --serve" && ps -o pid,etime,rss --no-headers -p $e; done
+  echo "== health =="; curl -s -m5 ${STRATA_API_KEY:+-H "Authorization: Bearer $STRATA_API_KEY"} http://127.0.0.1:8091/health; echo
+  echo "== cards =="; check 2>&1 || true
   echo "== gpu =="; nvidia-smi --query-gpu=index,memory.used --format=csv,noheader | head -6
   echo "== ram =="; awk '/MemAvailable/{print $2/1048576" GiB avail"}' /proc/meminfo
 }
