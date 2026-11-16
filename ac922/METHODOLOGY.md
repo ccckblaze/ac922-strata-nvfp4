@@ -69,3 +69,19 @@ hours of GPU burned on a lane that answered 200 OK while emitting exactly one to
   divergence probes, and task accuracy, not perplexity.
 - Cross-stack accuracy comparison is currently single-stack (see `ACCURACY.md`); the planned
   anchor is official-model same-question replay (`eval/ref_run.py` + `eval/compare_results.py`).
+
+## 9. Resume-gap accounting (user-visible latency is not pp)
+
+- Per-request `pp` in the engine self-report is a *phase rate*; a chat turn's perceived speed is
+  `fixed cost + gap read + decode`, where `gap` is the tokens a continuation re-reads from its
+  last checkpoint (`gap = prompt − reused`).  `eval/resume_probe.py` measures both against the
+  same base prompt, and `eval/tg_short.py` runs alongside every geometry arm so a resume win that
+  costs decode speed is never booked as a win.
+- The re-read token is more expensive than a cold-computed token on this lane (measured slopes:
+  resume ≈ 0.47 ms/token vs cold ≈ 0.17 ms/token), so *checkpoint grid depth*, not raw prefill
+  throughput, sets interactive feel on long sessions.
+- Which knob actually moves the grid is a measured question, not a doc question: `--prompt-cache-every`
+  on its own moved nothing (bit-identical `reused`), and `--prompt-cache-tail` is `!multi_gpu`
+  gated, i.e. unusable on a split.  Arms therefore always test chunk alone **and** chunk × every
+  together, with the launched chunk read back from the engine's own startup banner — a config file
+  is not evidence that a flag landed.
