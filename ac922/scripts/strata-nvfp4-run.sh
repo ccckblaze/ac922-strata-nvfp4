@@ -31,22 +31,10 @@ stop(){
   rm -f "$PIDF"; echo stopped
 }
 start(){
-  # Volta kernel opt-ins (docs/NVIDIA_V100.md, 0.2.13): SM70_TABLE = three bit-exact decode kernels;
-  # PF_WMMA = FP16 tensor-core prompt experts (verified INERT on NVFP4 packs; kept for A/B);
-  # FUSE_DECODE / ARGMAX_ROWS_SM70 = same doc's bit-exact opt-ins.
-  export STRATA_SM70_TABLE=${STRATA_SM70_TABLE:-1} STRATA_PF_WMMA=${STRATA_PF_WMMA:-1}
-  export STRATA_FUSE_DECODE=${STRATA_FUSE_DECODE:-1} STRATA_ARGMAX_ROWS_SM70=${STRATA_ARGMAX_ROWS_SM70:-1}
-  # >>> AC922 adopted env (DECISIONS.md: select-simt) >>>
-  export STRATA_SELECT_SIMT=${STRATA_SELECT_SIMT:-2}
-  export STRATA_SELECT_ALT_MIN_TOKENS=${STRATA_SELECT_ALT_MIN_TOKENS:-65536}
-  # <<< AC922 adopted env <<<
-  export STRATA_PREFILL_STREAM_AHEAD=${STRATA_PREFILL_STREAM_AHEAD:-0}
-  # >>> AC922 adopted env (DECISIONS.md: batchenv) >>>
-  export STRATA_PIPE_ADAPT_EVERY=${STRATA_PIPE_ADAPT_EVERY:-8}
-  export STRATA_BATCH_MTP=${STRATA_BATCH_MTP:-1}
-  export STRATA_PIPED_MTP=${STRATA_PIPED_MTP:-1}
-  export STRATA_BATCH_SELF_COMMIT=${STRATA_BATCH_SELF_COMMIT:-0}
-  # <<< AC922 adopted env <<<
+  # Volta kernel opt-ins (docs/NVIDIA_V100.md, 0.2.13) + the adopted ledger env, shared with
+  # the dev lane — see adopted-env.sh (SM70_TABLE / PF_WMMA / FUSE_DECODE / ARGMAX_ROWS_SM70 /
+  # select-simt / batchenv, all default-on unless the caller overrides).
+  . "$HERE/adopted-env.sh"
   GPUS=${GPUS:-0,1,2,3,4,5}
   export CUDA_VISIBLE_DEVICES="$GPUS"
   export NB_CUT=${NB_CUT:-0.5}

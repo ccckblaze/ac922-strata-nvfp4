@@ -50,6 +50,38 @@ here works without touching `configs/strata-nvfp4-final.json`.
 4. Wait for health (`/health`, typically 3–7 min: the engine locks ~48 GiB of experts and fills
    the GPU expert cache; the box may be slow for 1–3 minutes, which is normal).
 
+## Development lane on the leftover cards (requires operator authorization)
+
+Once the pinned lane drops to the 4-card geometry (B4: `GPUS=0,1,2,3`, `NB_CUT=0.69`,
+see step 3 above), cards 4/5 free up for an independent dev/iteration instance:
+
+```
+bash ac922/scripts/devlane.sh check    # who holds the dev cards, RAM available
+GPUS=... STRATA_BATCH=4 STRATA_BATCH_GROUPS=2 bash ac922/scripts/strata-nvfp4-run.sh start   # prod -> B4 (authorized)
+bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
+```
+
+- **Occupancy guard**: `start` refuses if any process holds the dev cards — cards 4/5 may
+  belong to a cooperating thread (e.g. I2V); preempt only deliberately with `FORCE=1`.
+- **NUMA**: GPU3-5 are the node8 NVLink triangle (cpus 88-175), GPU0-2 the node0 triangle.
+  `devlane.sh` binds its engine to the island its cards live on (`numactl --cpunodebind
+  --preferred`, auto-derived, override with `DEV_NUMA=off|<node>`), so dev staging never
+  pulls node0 bandwidth away from the production arena. It deliberately does **not** use
+  `numabind.so`/`NB_CUT` (that is the straddling lane's arena split) and does not re-run
+  `ple_park` — weight page cache is shared read-only between lanes.
+- **Sizing** (env-overridable): `DEV_MAX_CONTEXT=131072 DEV_KV_RESIDENT=16384
+  DEV_CC_MIB=32768 DEV_CC_SLOTS=4 DEV_RESIDENT_GIB=16`, batch pair follows the card count
+  (2/1). These keep the dev lane's new RAM footprint (host-tier KV) small enough that the
+  production B4 lane keeps its pinned arena; `start` also aborts below `DEV_MIN_AVAIL_GIB=32`
+  available. Vision attaches automatically if `build-vision/bin/strata-vision` exists
+  (`DEV_VISION=0` to force text-only).
+- **Isolation**: separate pidfile (`/tmp/strata-nvfp4-dev.pid`), config
+  (`/data/work/strata-nvfp4-dev.json`), logs (`*-dev*`), port 8092; `stop` kills only its own
+  process tree, never a broad pkill.
+
+Full 6-card acceptance (B6) is only restored by `stop`-ing the dev lane and restarting the
+production launcher without the 4-card overrides.
+
 ## Acceptance gates (run these, in this order, before trusting any number)
 
 | Gate | Tool | Pass condition |
