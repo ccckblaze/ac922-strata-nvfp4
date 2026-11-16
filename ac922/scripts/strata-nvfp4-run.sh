@@ -75,6 +75,12 @@ def setflag(name,val):
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
 if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"])
+# warm-resume geometry: a continuation re-reads back to the last checkpoint, and checkpoints land on
+# prefill chunk boundaries spaced ceil(PROMPT_CACHE_EVERY / chunk) chunks, so BOTH knobs have to move
+# together (EVERY <= chunk) or the gap floor stays at the chunk.  Unset = the shipped config's value.
+if os.environ.get("PREFILL_CHUNK"): setflag("--prefill",os.environ["PREFILL_CHUNK"])
+if os.environ.get("PROMPT_CACHE_EVERY"): setflag("--prompt-cache-every",os.environ["PROMPT_CACHE_EVERY"])
+if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_CACHE"])
 ncard=len(c["gpu"])
 fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
 if batch<2 and groups<2 and fbatch!=ncard:
