@@ -35,6 +35,10 @@ DEV_MIN_AVAIL_GIB=${DEV_MIN_AVAIL_GIB:-32}
 DEV_VISION=${DEV_VISION:-auto}          # auto|0|1
 DEV_NUMA=${DEV_NUMA:-auto}              # auto|off|<node id>
 DEV_FLAGS=${DEV_FLAGS:-}                # extra engine flags, ";"-separated "flag value" pairs
+# Window shape, for decode-first arms: DEV_BATCH=0 drops --batch/--batch-groups entirely so the
+# engine admits one request at a time, which is the precondition of DEV_PIPELINE=N
+# (--pipeline-windows N: legal only on a two-stage split). DEV_BATCH_GROUPS pins rows per group.
+# With neither set the historical shape is reproduced exactly: batch = card count, groups = 1.
 mkdir -p "$LOGD"
 
 . "$HERE/adopted-env.sh"
@@ -141,12 +145,23 @@ setflag("--max-context",mctx); setflag("--kv-resident",kvr)
 setflag("--conversation-cache-mib",ccmib); setflag("--conversation-cache-slots",ccslots)
 setflag("--resident-budget-gib",resgib)
 setflag("--spec-min-p",os.environ["DEV_SPEC_MIN_P"]) if os.environ.get("DEV_SPEC_MIN_P") else None
+def delflag(name):
+    while name in c["args"]:
+        i=c["args"].index(name); del c["args"][i:i+2]
+# The window shape is chosen first so DEV_FLAGS keeps the last word. It used to be forced after the
+# DEV_FLAGS loop, which made every shape arm unreachable from the environment: --pipeline-windows
+# needs the engine to admit one request at a time, and the forced --batch blocked exactly that.
+batch=os.environ.get("DEV_BATCH",str(len(glist)))
+if batch=="0":
+    delflag("--batch"); delflag("--batch-groups")
+else:
+    setflag("--batch",batch); setflag("--batch-groups",os.environ.get("DEV_BATCH_GROUPS","1"))
+if os.environ.get("DEV_PIPELINE"): setflag("--pipeline-windows",os.environ["DEV_PIPELINE"])
 for pair in os.environ.get("DEV_FLAGS","").split(";"):
     parts=pair.split()
     if len(parts)==2: setflag(parts[0],parts[1])
     elif len(parts)==1 and parts[0]:
         if parts[0] not in c["args"]: c["args"].append(parts[0])
-setflag("--batch",str(len(glist))); setflag("--batch-groups","1")
 venv=os.path.join(src,"build-vision","bin","strata-vision")
 if vision=="0" or (vision=="auto" and not os.path.exists(venv)) or not isinstance(c.get("vision"),dict):
     c.pop("vision",None)
