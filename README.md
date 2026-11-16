@@ -1,4 +1,80 @@
-# Strata NVFP4
+# Qwen3.8-Flash-Next on an AC922: 256K context, six live streams, on six V100s from 2017
+
+**Deliverable index:** [English](ac922/README.md) · [中文成果总览](ac922/README.zh-CN.md)
+
+> **EN —** We made a 125B hybrid-MoE flagship behave like a modern-GPU inference server on a
+> POWER9 box with six Volta cards: the **full 262,144-token context is live**, cold prefill crosses
+> **7,000 tok/s**, **six concurrent full-window streams decode together**, and accuracy lands at
+> **GSM8K 97.12 / MATH500 89.40 / HumanEval 96.95**. Every number is measured on this machine, every
+> knob carries an adopted-or-rejected ledger entry, and the engine is exactly upstream `b08a70078` —
+> clone, `cmake`, run, and you have the server we benchmarked.
+>
+> **中文 —** 我们把 125B 混合 MoE 旗舰，在 POWER9 + 六张 V100 的老服务器上跑出了"当代推理服务器"的形态：
+> 262,144 满窗上下文真实可用、冷 prefill 破 7,000 tok/s、6 路满窗并发同时解码，精度 GSM8K 97.12 /
+> MATH500 89.40 / HumanEval 96.95。每个数字都有实测出处，每个开关都有采纳或否决的账；克隆本仓库即可编译、
+> 复现我们跑分的那台引擎。
+
+![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v2-2026-11-16.png)
+
+## The numbers (all measured on this box)
+
+| | **6-card lane (B6)** | 4-card lane (B4) |
+| --- | ---: | ---: |
+| Max context, live | **262,144** (probe 261,494 passes) | **262,144** |
+| Cold prefill @ 262K | **7,016 tok/s** | 5,120 tok/s |
+| Single-stream decode @ 8K / @ 262K | 66.0 / 72.5 tok/s | 57.2 / 57.1 tok/s |
+| Full-window concurrency | **6 × 245K live · agg 166.4** (23.4/stream) | 4 × 245K · agg 93.5 (21.6/stream) |
+| Short-window concurrency @ 8K | agg 218.2 (35.7/stream) | agg 133.6 (33.3/stream) |
+| VRAM resident · RAM pinned | 87.7 GiB · 47.7 GiB | 58.6 GiB · 47.7 GiB |
+
+Accuracy, full suites, errors = 0, budget audit clean: **GSM8K 97.12%** (1,319) · **MATH500 89.40%** (500) · **HumanEval 96.95%** (164)
+
+Capacity rule that survived every experiment: **N cards ↔ N full-window streams** — over-subscription queues, never crashes (verified at 8 × 245K on six cards).
+
+## The machine
+
+| Component | Spec |
+| --- | --- |
+| CPU | dual POWER9 20C SMT4 (ppc64le) |
+| GPU | 6× V100-16GB SXM2 · NVLink 2.0 · two NUMA islands of three cards |
+| RAM | **256 GiB real DDR** — `/proc/meminfo` over-reports (~341 GiB online); the excess is V100 HBM windows mapped into system physical address space, not RAM, and trusting it caused our early freezes |
+| Disk | Intel PM1725a NVMe |
+| Engine | exactly upstream `b08a70078` (strata 0.1.59 / `v0.2.13-nvfp4.1`) — the deliverable commit adds only [`ac922/`](ac922/README.md), zero engine diff |
+| Model | NVFP4-GPTQ pack, 17 files, sha256-manifested (`results/MODEL-SHA256SUMS.txt`) |
+
+## Why it works — each row is a measured decision, not folklore
+
+| Mechanism | What it buys |
+| --- | --- |
+| Routed experts pinned in host RAM, hot set cached in VRAM | HBM stays free for KV → the full 262K window fits on 16 GB cards |
+| Batched pipelined ring (`--batch 6 --batch-groups 3`) | FIFO → six real streams; aggregate decode **+74%** |
+| MTP drafting *inside* the batched window | per-stream speed survives batching |
+| NUMA arena binding + PLE page-cache parking | kills POWER9 remote reads; tg +1.0–1.4%, placement 100% on target |
+| Conversation cache 128 GiB / 16 slots | recompute → restore **−97%** (65 s → 2 s) with zero pp/tg/VRAM regression |
+| Bit-exact sm70 kernels | Volta decode gains at provably zero quality risk |
+
+## Reproduce it
+
+| Step | Do this |
+| --- | --- |
+| Build | `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 && cmake --build build -j` — [`BUILD.md`](ac922/BUILD.md) |
+| Run | `bash ac922/scripts/strata-nvfp4-run.sh start` — [`RUN.md`](ac922/RUN.md) |
+| Gate | sha256 manifest → `laneverify.sh` → `alive.py` three probes → determinism (`det_same=true`) |
+| Measure | torch-free `eval/` harness under the paired same-boot protocol — [`METHODOLOGY.md`](ac922/METHODOLOGY.md) |
+
+## Honest gaps (deliberately not papered over)
+
+| Gap | Status |
+| --- | --- |
+| Cross-stack accuracy is single-column | reference lanes S1/M1 closed under our grading shapes; their *performance* curves are published. Next: re-anchor vs official model (`eval/ref_run.py`, needs one API key) |
+| AIME / ceval | sample-level only (full suites stopped); queued |
+| GPQA / IFBench / LiveCodeBench-v6 / ToolEval | graders built and gated green; GPU runs queued |
+| Vision suites | blocked by the pack export (no vision tower), not by code |
+| Upstream drift | 167 commits after our pin; policy is whole-version bumps only, backlog in [`DEVLOG.md`](ac922/DEVLOG.md) |
+
+---
+
+## Also on this fork: the upstream Strata NVFP4 story (consumer GPUs)
 
 **Qwen3.8-Flash-Next (125B hybrid MoE) with NVFP4 experts on one RTX 20, 30, 40 or 50 card (12 GB of VRAM or more)
 and 64 GB of RAM or more, text and pictures.** A fork of [Niko1221/Strata](https://github.com/Niko1221/Strata), on
@@ -295,13 +371,15 @@ files by hand.
 The design is upstream's: the routed experts live in RAM, the most-used ones are cached in VRAM, the misses are
 computed on the CPU and fetched over PCIe in parallel with the GPU, and an MTP draft head speculates. Upstream's README
 is kept as [README.upstream.md](README.upstream.md). [docs/NVFP4.md](docs/NVFP4.md) has every measurement behind this
-fork, and the [releases](https://github.com/sergqwer/strata-nvfp4/releases) say what changed in each.
+fork, and the upstream fork's [releases](https://github.com/sergqwer/strata-nvfp4/releases) say what changed in each.
+This repo (`ccckblaze/ac922-strata-nvfp4`) is that history plus one deliverable commit: the pinned AC922 lane in
+[`ac922/`](ac922/README.md), with no changes to the engine code at `b08a70078`.
 
 ## Quick start
 
 ```bat
-git clone https://github.com/sergqwer/strata-nvfp4
-cd strata-nvfp4
+git clone https://github.com/ccckblaze/ac922-strata-nvfp4
+cd ac922-strata-nvfp4
 START-HERE.bat
 ```
 
@@ -666,10 +744,10 @@ into the build is MIT as well.
 
 ## Star History
 
-<a href="https://www.star-history.com/#sergqwer/strata-nvfp4&Date">
+<a href="https://www.star-history.com/#ccckblaze/ac922-strata-nvfp4&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=sergqwer/strata-nvfp4&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=sergqwer/strata-nvfp4&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=sergqwer/strata-nvfp4&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=ccckblaze/ac922-strata-nvfp4&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=ccckblaze/ac922-strata-nvfp4&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=ccckblaze/ac922-strata-nvfp4&type=Date" />
  </picture>
 </a>
