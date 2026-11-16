@@ -4,10 +4,19 @@
 
 ```
 AC922_ROOT=/data/work
-SRC=/data/work/strata-nvfp4-src            # engine checkout (== this repo, b08a70078)
+SRC=/data/work/ac922-strata-nvfp4          # this repo, pinned: engine, serve, vision encoder and
+                                           # data/expert-profile.bin all run from inside the checkout
 MODEL_DIR=/data/work/Strata-data/models/nvfp4-gptq   # 17 files, see results/MODEL-SHA256SUMS.txt
 LOGD=/data/champion
 ```
+
+On the delivery host `/root/strata-nvfp4-run.sh` is a thin wrapper that exports exactly the
+layout above (plus `RUN_JSON=/data/work/strata-nvfp4.run.json`,
+`PIDF=/tmp/strata-nvfp4-run.pid`) and execs `ac922/scripts/strata-nvfp4-run.sh` from this
+checkout. Nothing in the serving path reads the older `strata-nvfp4-src` tree: that tree
+carries unreleased experiment bits (a default-off `STRATA_DEDUP` patch in `serve/` plus eight
+uncommitted engine edits) and its `serve/` has drifted, so the pinned lane launches engine
+**and** serve from this repo only.
 
 Multimodal adds one optional asset under `MODEL_DIR` (`mmproj-F16.gguf`, ~904 MB, top level of
 `unsloth/Qwen3.8-Flash-Next-GGUF`) and the CPU encoder at `$SRC/build-vision/bin/strata-vision`
