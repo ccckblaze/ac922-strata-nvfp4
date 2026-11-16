@@ -32,6 +32,11 @@ FILL = ("Reimagine a lighthouse keeper logging nightly waves and distant ships; 
 REQ = re.compile(r"prompt (\d+) tokens = (\d+) reused \+ \d+ read in \d+ ms \(([\d.]+) tok/s\),"
                  r" (\d+) generated in \d+ ms \(([\d.]+) tok/s\), drafts accepted (\d+) of (\d+)")
 WIN = re.compile(r"batch \(([^)]*)\): (\d+) group-steps, (\d+) rows in (\d+) ms = ([\d.]+) rows/s")
+# The engine prints this per batch window anyway, so each burst can carry its own decomposition
+# instead of borrowing another machine's ledger: where the window time went, and how many rows
+# really shared it (avg rows 1.0 means the shape bought no sharing at all).
+ANA = re.compile(r"strata batch: (\d+) windows, avg ([\d.]+) rows, ([\d.]+) ms/window = run [\d.]+"
+                 r" \(CUDA0 GPU-reach wait ([\d.]+) \+ CPU experts ([\d.]+)\)")
 
 
 def flag(name, default=None):
@@ -130,21 +135,25 @@ def main():
     rows = [m.groups() for m in REQ.finditer(data) if int(m.group(4)) == gen]
     wins = WIN.findall(data)
     rps = [int(w[2]) / max(1, int(w[1])) for w in wins]
-    tg = []
-    for r in res:
-        if r["first"] is not None and r["last"] and r["last"] - r["first"] > 0.05:
-            tg.append(round((r["ctok"] - 1) / (r["last"] - r["first"]), 1))
-    ttfts = [round(r["first"], 2) for r in res if r["first"] is not None]
-    ends = [round(r["last"], 2) for r in res if r["last"] is not None]
+    # A stream that came back short (an engine refusal, a mid-stream error, a slot that never
+    # opened) rates itself absurdly high or absurdly low and poisons the aggregate. Keep only
+    # streams that delivered the asked generation, and say how many were dropped.
+    ok = [r for r in res if r["first"] is not None and r["last"]
+          and r["last"] - r["first"] > 0.05 and (r["ctok"] or 0) >= 0.9 * gen]
+    dropped = n - len(ok)
+    tg = [round((r["ctok"] - 1) / (r["last"] - r["first"]), 1) for r in ok]
+    ttfts = [round(r["first"], 2) for r in ok]
+    ends = [round(r["last"], 2) for r in ok]
     sum_tg = round(sum(tg), 1) if tg else None
     live = (round(max(ends) - min(ttfts), 2) if ttfts and ends else None)
-    wall_tg = round(sum(r["ctok"] for r in res) / live, 1) if live and live > 0.5 else None
+    wall_tg = round(sum(r["ctok"] for r in ok) / live, 1) if live and live > 0.5 else None
+    ana = [[float(x) for x in m.groups()] for m in ANA.finditer(data)]
     rec = {"tag": tag, "n": n, "gen": gen, "depth_target": depth,
            "ptok": sorted(set(r["ptok"] for r in res if r["ptok"])) or [ptok],
            "ctok": sorted(set(r["ctok"] for r in res)),
            "reused_pct": round(100.0 * sum(r["reused"] or 0 for r in res) /
                                max(1, sum(r["ptok"] or 0 for r in res)), 1),
-           "span": span, "decode_live_s": live,
+           "span": span, "decode_live_s": live, "dropped_streams": dropped,
            "sum_tg": sum_tg, "wall_tg": wall_tg,
            "tg_med": round(st.median(tg), 1) if tg else None,
            "tg_min": min(tg) if tg else None, "tg_max": max(tg) if tg else None,
@@ -156,6 +165,11 @@ def main():
            "pp_med": round(st.median([float(g[2]) for g in rows]), 1) if rows else None,
            "shape": wins[-1][0] if wins else None,
            "rows_per_step": round(sum(rps) / len(rps), 2) if rps else None,
+           "anatomy": {"lines": len(ana),
+                       "avg_rows": round(st.median([r[1] for r in ana]), 2) if ana else None,
+                       "ms_window": round(st.median([r[2] for r in ana]), 2) if ana else None,
+                       "gpu_reach": round(st.median([r[3] for r in ana]), 2) if ana else None,
+                       "cpu_experts": round(st.median([r[4] for r in ana]), 2) if ana else None},
            "windows": len(wins), "warm": warm_note, "ts": time.strftime("%H:%M:%S")}
     print(json.dumps(rec, ensure_ascii=False), flush=True)
 
