@@ -30,6 +30,27 @@ Non-bit-exact changes must pass all three before adoption:
 Bit-exact opt-ins skip 1–2 but still require 3. `det_same=true` on a pinned REF set is the
 gate for "the lane is the lane" after any restart.
 
+Two corrections found while gating the parked-slot capacity change on 2026-11-16, both of which
+change how the three gates above may be read:
+
+- **A gate that cannot reach the lane must abort, not grade.**  Since the lane started requiring
+  `STRATA_API_KEY` (2026-11-16), every fixture in `sbench.py` / `divprobe.py` / `cccheck.py` was
+  issuing unauthenticated requests, so each gate collected zero rows and the wrapper turned that
+  into `FAIL det-nondeterministic` / silent empty comparisons for ~24 h of adoptions.  The fixtures
+  now send the key, exit 3 on 401/403, and `qualgate.sh` refuses to grade when rows are missing.
+  Related hygiene: never resolve the engine log with `ls -t $LOGD/*.log | head -1` — that lands on
+  the serve stdout log (or the other lane's), which is how pp/tg were being read back as `null`.
+- **Greedy output on this lane is bit-stable only at short horizons, so REF equality is a
+  same-boot invariant.**  Replaying one identical 30K-token request four times at
+  `temperature=0` against one running engine produced 3 distinct answers at 128 tokens and 4 at
+  512, with the first differing character at index **8** in half the pairs
+  (`eval/repro_probe.py`, numbers-only by construction).  Cross-boot early-cell divergence against
+  a stored REF is therefore inside the noise floor and is *not* evidence of a regression; it must be
+  adjudicated with `repro_probe.py` plus the aggregate accuracy anchors, and a REF re-baseline has
+  to be recorded as a deliberate act, not a way to make a FAIL go away.  What stays valid as a hard
+  gate: `det_same` over three runs inside one boot at the 32-token horizon, acceptance-rate drift,
+  and cold == cached equality (`selfcheck.sh`) at the same horizon.
+
 ## 4. Lane acceptance before suites
 
 `scripts/alive.py` — three real requests (arithmetic, one GSM8K item, one HumanEval exec-graded

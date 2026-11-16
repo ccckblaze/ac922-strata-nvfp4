@@ -47,6 +47,11 @@ here works without touching `configs/strata-nvfp4-final.json`.
    0.69 for 3:1). The launcher calls `ple_park.sh 500` (splits the 48.8 GiB PLE page cache across
    both islands) and `LD_PRELOAD=numabind.so` (arena placement) — both are documented in
    `DECISIONS.md` and each is worth ~1% tg on its own.
+   `start` refuses to launch across cards another lane already holds (the same occupancy guard the
+   dev lane uses) — otherwise the 6-card default silently straddles 4/5 while a dev or cooperating
+   thread is live there; override deliberately with `FORCE=1`. `stop`/`status` are pidfile-tree
+   scoped for the same reason: a box-wide `pkill -f "build/strata --serve"` once killed the other
+   lane's engine while its supervisor kept answering `/health` 200 with nothing behind it.
 4. Wait for health (`/health`, typically 3–7 min: the engine locks ~48 GiB of experts and fills
    the GPU expert cache; the box may be slow for 1–3 minutes, which is normal).
 
@@ -78,6 +83,11 @@ bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
 - **Isolation**: separate pidfile (`/tmp/strata-nvfp4-dev.pid`), config
   (`/data/work/strata-nvfp4-dev.json`), logs (`*-dev*`), port 8092; `stop` kills only its own
   process tree, never a broad pkill.
+- **Parked-conversation capacity ships at `--conversation-cache-slots 32 --conversation-cache-mib
+  98304`** (see `DECISIONS.md`): below the live conversation count it relays nothing at all, so size
+  it to the concurrency you intend to serve, not to the RAM budget — the footprint reaches only
+  17-42% of the budget in production, while the slot count is a cliff.  `CC_SLOTS`/`CC_MIB` override
+  the shipped values at launch without editing the config.
 
 Full 6-card acceptance (B6) is only restored by `stop`-ing the dev lane and restarting the
 production launcher without the 4-card overrides.

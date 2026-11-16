@@ -112,6 +112,34 @@ each entry is a *result*, not a diary.
   It is the price of the adopted pipelined ring, not a missed switch.
 - Tools: `eval/resume_probe.py`, `eval/tg_short.py`, `eval/cap_probe.py` (+ METHODOLOGY 9).
 
+## Phase F — production verification of the capacity fix (11-16 late evening)
+
+- Phase E's root cause was reproduced on the **live production lane**, not a dev box: 20 concurrent
+  conversations, cold build then continuation, `--conversation-cache-slots 16` relayed **0 of 40**
+  continuations (every one re-prefilled ~10.8K tokens, median turn prefill 6574 ms); `slots 32` +
+  `mib 98304` relayed **40 of 40** (gap = the new turn, median 1306 ms, **5.0× faster**).
+- The obvious confound was killed with a control rather than argued: a *fresh* engine at the old
+  `slots 16 / mib 131072` also relayed **0/40** with median 6662 ms, i.e. bit-comparable to the
+  4-hours-into-production arm.  Freshness was not the variable; the slot ceiling was.
+- Overshoot recorded: we had predicted a proportional failure (~4 of 20 missing above a 16-slot
+  ceiling).  It is all-or-nothing -- past the ceiling nothing relays -- so a capacity ceiling shows
+  up as a cliff in the outcome distribution, never in the averages.
+- Adopted into the shipped config (`configs/strata-nvfp4-final.json`), with the RAM budget *lowered*
+  128 → 96 GiB so doubling parked conversations still shrinks the worst case.  tg8k 55.9 tok/s
+  (inside the B4 band), det ×3 identical, no VRAM change.
+- Two defects surfaced by trying to gate this, both larger than the ticket itself:
+  the numeric gates had been **grading their own auth failures** for ~24 h (see METHODOLOGY 3), and
+  the production `stop()` used a box-wide `pkill -f "build/strata --serve"`, which killed the dev
+  lane's engine while its supervisor kept answering `/health` 200 -- a lane that looks alive with
+  nothing behind it.  Both fixed: lane-scoped stop/status/check, a card-occupancy guard on `start`
+  (the 6-card default had already silently straddled cards 4/5 once), fixtures authenticate and
+  abort on 401, and `eval/repro_probe.py` prices the reproducibility floor instead of pretending
+  cross-boot hash equality is an invariant.
+- Pre-existing, not caused by this change, still open: the 64K `selfcheck` cell flips
+  cold != cached in roughly half of runs (Nov-14 history shows the same 5-of-9 pattern at
+  `slots 4/16`), and it is the first-relay pass only -- passes 2 and 3 match cold.  Ticket owner:
+  whoever chases the nondeterminism found by `repro_probe.py`.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -145,3 +173,6 @@ each entry is a *result*, not a diary.
 8. Cross-check the served prompt length against the payload you built.  Twice this session a probe
    was silently measuring something else (a messages array flattened to a string: ptok=52 for a
    20K transcript; four filler strings indexed by conversation: NC=8 died after four rows).
+9. A green-looking gate is not a gate.  Assert the fixture reached the lane (rows > 0, HTTP 200 with
+   auth) before interpreting its verdict, and check liveness with a real request -- a supervisor can
+   answer `/health` 200 with its engine dead, and a 401 can be graded as `FAIL det-nondeterministic`.
