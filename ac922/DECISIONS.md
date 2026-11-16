@@ -87,10 +87,10 @@ Two candidates stay priced rather than adopted:
 
 - **`--trim-stage-weights` + explicit `--layer_split 8,16,24,32,40`.** The only lever that lifted a
   shape (same 2-rows shape: 140 -> 202; shipped shape: 228 -> 234, and at 131K 135 -> 154).
-  Blocked by an unexplained symptom: on all three trim arms the *solo* panel point returned a
-  truncated generation (`ctok` 18 of 256 asked, at 07:26 on A11, and A2/A7 show the same hole).
-  Until that is reproduced and root-caused, it does not go on the production lane.
-  Ticket: **D1 - solo request truncates under explicit split + trim**.
+  It was blocked by an unexplained symptom: on the trim arms the *solo* panel point returned a
+  truncated generation (`ctok` 18 of 256 asked on A11/A2/A7). **That block is now withdrawn** - see
+  the D1 reclassification below - so trim goes back on the adoption list, to be re-gated rather than
+  re-litigated.
 - **`--batch-max-context 65536`** (elastic slots): requests over ~64K leave the slots and run on the
   solo path, where each gets single-stream speed (~75 tok/s at 98K instead of 21-24). It is a
   latency option for deep workloads, not a throughput one - aggregate falls from 90.6 to 63 at
@@ -132,3 +132,40 @@ Standing rule for future geometry changes: **a REF is per-geometry, not per-engi
 card count, `--layer_split`, or cut positions invalidates relay cells and requires re-anchoring, with
 `det` bitwise equality - not the relay rate - as the regression test. Keep the old REF beside the new
 one so the cold path can still be traced across geometries.
+
+## D1 reclassified: "solo requests truncate" was a broken ruler, not a lane fault (2026-11-17)
+
+While testing whether the lane could hold six full-window streams, `aggbench` reported
+`dropped_streams: 6` at 234K with generations of 409-736 against 1024 asked - which reads exactly
+like a lane that cannot survive deep concurrency. It could not. The probe `eval/fullwinprobe.py`
+separates the two candidate causes by reading the engine's own `usage.completion_tokens` and
+`finish_reason` instead of counting SSE deltas, and the answer was unambiguous:
+
+    n=6 depth=234300 gen=1024  ctok_use [714, 322, 401, 1024, 1024, 698]
+                               finish   [stop, stop, stop, length, length, stop]
+                               tok_per_chunk [1.00 ... 1.01]  sum_tg 121.8  span 52.9s
+
+`tok_per_chunk` is 1.0, so the streams really did deliver only 322-714 tokens - and they stopped
+because **the model ended its own turn** (`finish_reason=stop`) on a degenerate repeated-text
+fixture at temperature 0, not because the lane refused anything. All six streams decoded in one
+overlapping window at 15.4-26.7 tok/s each.
+
+Two consequences, both measured rather than argued:
+
+- **D1 is closed as not-a-bug.** The `ctok 18 of 256` solo truncation was attributed to
+  `--trim-stage-weights`, but re-reading the sweep with this in mind shows the same signature on arms
+  that have no trim at all - A4 `ctok` 4, A5 `ctok` 22, A10 `ctok` 50, A9 `ctok` 154, A2 `ctok` 18 -
+  so it never discriminated trim from anything else. Trim is the only lever that ever lifted a shape
+  here (228 -> 234 at 8K, 135 -> 154 at 131K), and it goes back on the list; it still has to pass the
+  normal gates, it just no longer carries a defect.
+- **Deep-concurrency figures taken with the old guard undercount streams.** `A2_6x2@262000 n=4`
+  (`ctok_min` 128) and every 131K row (`ctok_min` 192) had at least one natural stop below the
+  `>= 0.9 * gen` bar, so those aggregates were scored on fewer than the nominal number of streams.
+  Direction of error is downward, so the shape ranking (rows/group is the axis, slots > cards loses)
+  stands, but the absolute deep numbers should be re-read under the fixed guard before being quoted.
+
+The guard now keeps a stream when `finish_reason == "stop"` regardless of length, reports
+`early_stop` separately from `dropped_streams`, and `dropped_streams` means only "the lane failed
+this stream" (error, or no decode window at all). `calibrate()` gained a one-unit refinement pass,
+because the coarse 5% band parked at 234,300 for a 260,000 target - i.e. it would have answered a
+"can we do 6 x 262K" question about 6 x 234K.
