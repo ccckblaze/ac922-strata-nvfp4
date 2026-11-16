@@ -152,8 +152,15 @@ json.dump(c,open(out,"w"))
 PY
   local TS; TS=$(date -u +%FT%TZ)
   local LOG="$LOGD/strata-nvfp4-dev-$TS.log"; echo "LOG=$LOG"
-  ( cd "$SRC" && setsid $NA /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port "$DEV_PORT" >"$LOG" 2>&1 & echo $! > "$PIDF" )
-  echo "dev lane started pid $(cat $PIDF) port $DEV_PORT"
+  # Detach fully: the wrapper subshell must not linger (a `cmd && ext &` list is not exec'd
+  # by bash, which both holds caller pipes open and records the wrapper pid, not serve's).
+  # Close stdin, send the wrapper's own fds to the bit bucket, then resolve serve's real pid
+  # from the unique --config path.
+  ( cd "$SRC" && setsid $NA /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port "$DEV_PORT" </dev/null >"$LOG" 2>&1 & ) >/dev/null 2>&1
+  sleep 2
+  local sp; sp=$(pgrep -f "serve.server --engine strata --config $RUN" | head -1)
+  [ -n "$sp" ] && echo "$sp" > "$PIDF"
+  echo "dev lane started pid ${sp:-unknown} port $DEV_PORT"
 }
 stop(){
   if [ -f "$PIDF" ]; then
