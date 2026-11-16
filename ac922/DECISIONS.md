@@ -102,3 +102,33 @@ ramp, not steady decode. Steady deep decode at 131K with a long generation is ~7
 21-24 per stream when six of them share the lane. Both calibers are now produced by
 `ac922/eval/aggbench.py`, which refuses to score a stream that came back short.
 
+
+## Quality gate: the 4-card REF did not survive the 6-card switch (2026-11-17)
+
+`qualgate.sh check` on the 6-card ship config returned **FAIL** (`relay-cell-agreement 0/8`,
+`acc-drift 0.743`). It was not a numeric regression, and both signals that produced it are known
+non-numeric artifacts. Evidence, in order of strength:
+
+- **`det` reproduced the 4-card REF hash exactly** (`bfd40ecd4692`, three runs, same hash). The cold
+  path is bit-stable, which is the one anchor this lane can hold to a bit. A real numeric change -
+  the `undeclared_tool_calls` edit, the 4->6 card geometry - would have moved it. It did not.
+- **`reused` depth was unchanged** (110539 / 54034), so the relay cells were still comparable in
+  depth; what moved is which of them replay bit-identically. 4-card and 6-card differ in stage count
+  and cut positions, so resident/park boundaries - and therefore what a replay restores versus
+  recomputes - differ. On a path whose own reproducibility floor is ~2/8 cells, asking a 6-stage lane
+  to reproduce a 4-stage lane's relay hashes asks for something the lane cannot provide.
+- **`acc-drift` was a cold-draft-table artifact.** The engine booted at 07:29:46 and the gate ran at
+  07:30, so the suffix-draft model was still cold: 24/35 = 0.686. The same boot four minutes later,
+  after the fixtures themselves had served the lane, measured 24/26 = 0.9231. The sentinel compares
+  against a REF written on a *warmed* lane, which is exactly the history sensitivity documented in
+  `eval/qualgate.sh`. That ratio is what tripped 0.75.
+
+Action taken: the 4-card REF is preserved as `REF-4card-20261116.json` (nothing deleted), and a new
+REF was written on the ship config (`ship6x3b-1117`). A self-anchored `check` on the same boot then
+returned **QUALGATE-PASS** with `relay-cell-agreement 4/8 = 0.50` (comfortably above the ~2/8 floor)
+and `acc-drift-ok 1.0`, while `det` stayed bit-identical to the 4-card value.
+
+Standing rule for future geometry changes: **a REF is per-geometry, not per-engine.** Any change to
+card count, `--layer_split`, or cut positions invalidates relay cells and requires re-anchoring, with
+`det` bitwise equality - not the relay rate - as the regression test. Keep the old REF beside the new
+one so the cold path can still be traced across geometries.
