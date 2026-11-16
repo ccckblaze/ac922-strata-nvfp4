@@ -34,6 +34,7 @@ DEV_RESIDENT_GIB=${DEV_RESIDENT_GIB:-16}
 DEV_MIN_AVAIL_GIB=${DEV_MIN_AVAIL_GIB:-32}
 DEV_VISION=${DEV_VISION:-auto}          # auto|0|1
 DEV_NUMA=${DEV_NUMA:-auto}              # auto|off|<node id>
+DEV_FLAGS=${DEV_FLAGS:-}                # extra engine flags, ";"-separated "flag value" pairs
 mkdir -p "$LOGD"
 
 . "$HERE/adopted-env.sh"
@@ -140,6 +141,11 @@ setflag("--max-context",mctx); setflag("--kv-resident",kvr)
 setflag("--conversation-cache-mib",ccmib); setflag("--conversation-cache-slots",ccslots)
 setflag("--resident-budget-gib",resgib)
 setflag("--spec-min-p",os.environ["DEV_SPEC_MIN_P"]) if os.environ.get("DEV_SPEC_MIN_P") else None
+for pair in os.environ.get("DEV_FLAGS","").split(";"):
+    parts=pair.split()
+    if len(parts)==2: setflag(parts[0],parts[1])
+    elif len(parts)==1 and parts[0]:
+        if parts[0] not in c["args"]: c["args"].append(parts[0])
 setflag("--batch",str(len(glist))); setflag("--batch-groups","1")
 venv=os.path.join(src,"build-vision","bin","strata-vision")
 if vision=="0" or (vision=="auto" and not os.path.exists(venv)) or not isinstance(c.get("vision"),dict):
