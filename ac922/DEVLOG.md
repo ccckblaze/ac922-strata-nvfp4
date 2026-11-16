@@ -84,6 +84,34 @@ each entry is a *result*, not a diary.
 - Cross-path panorama chart v2 published (`results/charts/`); accuracy panel currently carries
   the single citable stack — backfill scheduled behind the official-denominator anchor.
 
+## Phase E — the "decode 20 / prefill 500" reconciliation (11-16 evening)
+
+- Closed the gap between published numbers (tg 53.75 on 4 cards, tg 66.0 on 6, pp 7k) and the
+  operator's felt speed (~20 / ~500) without touching the running lane.  The felt number is a
+  **mixture**, not a floor: classifying 8,300 self-report turns by how deep their prefix reuse went,
+  57.7% relay (mean prefill 0.34 s), 13.8% land partially (15.8 s), **28.5% start from nothing
+  (20.7 s)** — and that last class carries 80.6% of all re-read tokens (222 Mtok).  The split is
+  bimodal per length band: in the 240-250K band, 48% of turns relayed *at 249,829 tokens* while 50%
+  re-prefilled 244K tokens at 43 s each.
+- Root cause reproduced with a single flag: parked-conversation **slots**, not RAM.  Eight
+  concurrent conversations on the dev lane: `--conversation-cache-slots 8` relayed 16/16
+  continuations (gap = the new turn); the shipped default of 4 re-prefilled 16/16 from zero, for
+  ~0.1 GiB of RSS.  In production 3,529 of 3,583 conversation-cache eviction events happen at
+  exactly `parked=16` (its slot ceiling) while its RAM budget is nowhere near binding
+  (footprint p90 21.8 GiB, max 53.6 GiB of 128 GiB; 0.0% of events reach 97% of budget).
+- Priced the checkpoint grid over 10 arms with 10/10 pre-registered predictions:
+  `spacing = ceil(prompt-cache-every / chunk) x chunk`, and a continuation re-reads its own prefix
+  length modulo that spacing.  This reverses both intuitive fixes: setting `--prompt-cache-every`
+  to <= chunk halves the spacing for ~0% cold-prefill cost, while shrinking `--prefill` alone is
+  strictly dominated (it pays up to -56% cold prefill and cannot push spacing below 16384).
+- Request shape dominates geometry: the same ~57K content delivered as one user message resumed
+  12,670 tokens deep (9.3 s); delivered as a 12-turn messages array it relayed the whole prefix
+  (3.5 s) -- identical engine, identical config.
+- Dead end recorded so nobody re-opens it: `--batch-mtp` would remove the 333 "no per-slot draft
+  K/V, so the slot cannot park" events, but its own help bars it together with `--batch-groups`.
+  It is the price of the adopted pipelined ring, not a missed switch.
+- Tools: `eval/resume_probe.py`, `eval/tg_short.py`, `eval/cap_probe.py` (+ METHODOLOGY 9).
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -109,3 +137,11 @@ each entry is a *result*, not a diary.
    (it kills your own session).
 5. Card count buys concurrency; stage count and expert streaming buy speed — do not spend on the
    wrong axis.
+6. Read a flag's own help before modeling it: "--prompt-cache N = N conversation checkpoints"
+   (global, not per conversation) and "--batch-mtp ... not with --batch-groups" each killed a
+   designed experiment before it cost GPU-hours.
+7. Capacity ceilings show up as *outcome distributions*: 98.5% of evictions landing on
+   `parked=16` named the knob; every average we had published hid it.
+8. Cross-check the served prompt length against the payload you built.  Twice this session a probe
+   was silently measuring something else (a messages array flattened to a string: ptok=52 for a
+   20K transcript; four filler strings indexed by conversation: NC=8 died after four rows).
