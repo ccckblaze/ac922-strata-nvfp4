@@ -81,6 +81,12 @@ if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"]
 if os.environ.get("PREFILL_CHUNK"): setflag("--prefill",os.environ["PREFILL_CHUNK"])
 if os.environ.get("PROMPT_CACHE_EVERY"): setflag("--prompt-cache-every",os.environ["PROMPT_CACHE_EVERY"])
 if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_CACHE"])
+# parked-conversation capacity: the ceiling that actually bites under concurrency is the SLOT count,
+# not the RAM budget (measured 2026-11-16: 98.5% of cache evictions land at parked==slots, with the
+# footprint at 17-42% of --conversation-cache-mib).  Raising CC_SLOTS is ~free per conversation; keep
+# CC_MIB explicit so the worst case stays inside the box's real headroom.  Unset = shipped values.
+if os.environ.get("CC_SLOTS"): setflag("--conversation-cache-slots",os.environ["CC_SLOTS"])
+if os.environ.get("CC_MIB"): setflag("--conversation-cache-mib",os.environ["CC_MIB"])
 ncard=len(c["gpu"])
 fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
 if batch<2 and groups<2 and fbatch!=ncard:
