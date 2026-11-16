@@ -55,10 +55,13 @@ start(){
   if [ -f "$NUMABIND_SO" ]; then export LD_PRELOAD="$NUMABIND_SO"; fi
   TS=$(date -u +%FT%TZ)
   LOG="$LOGD/strata-nvfp4-$TS.log"; echo "LOG=$LOG"; echo "GPUS=$CUDA_VISIBLE_DEVICES NB_CUT=$NB_CUT"
-  # Rewrite the reference config onto this machine's layout (paths only; args untouched except batch).
-  python3.11 - "$BASE" "$RUN" "${STRATA_BATCH:-0}" "$SRC" "$MODEL_DIR" "$LOGD" <<'PY'
+  # Rewrite the reference config onto this machine's layout (paths only; args untouched except
+  # the batch pair — STRATA_BATCH / STRATA_BATCH_GROUPS rewrite them in place, so a 4-card boot
+  # must pass 4/2 and a 6-card boot 6/3 explicitly if the defaults below ever change).
+  python3.11 - "$BASE" "$RUN" "${STRATA_BATCH:-0}" "${STRATA_BATCH_GROUPS:-0}" "$SRC" "$MODEL_DIR" "$LOGD" <<'PY'
 import json,os,sys
-base,out,batch,src,model_dir,logd=sys.argv[1],sys.argv[2],int(sys.argv[3]),sys.argv[4],sys.argv[5],sys.argv[6]
+base,out,batch,groups,src,model_dir,logd=(sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4]),
+                                          sys.argv[5],sys.argv[6],sys.argv[7])
 c=json.load(open(base))
 c["exe"]=os.path.join(src,"build","strata"); c["cwd"]=src
 c["log"]=os.path.join(logd,"strata-nvfp4-engine.log")
@@ -76,7 +79,18 @@ elif isinstance(c.get("vision"),dict):
         if k in v: v[k]=fix(v[k])
     print("vision=%s mmproj=%s gpu=%s max_tokens=%s" % (os.path.basename(str(v.get("exe",""))), os.path.basename(str(v.get("mmproj",""))), v.get("gpu"), v.get("max_tokens")))
 print("gpu=",c["gpu"])
-if batch>=2: c["args"]+=["--batch",str(batch)]
+def setflag(name,val):
+    if name in c["args"]:
+        c["args"][c["args"].index(name)+1]=str(val)
+    else:
+        c["args"]+=[name,str(val)]
+if batch>=2: setflag("--batch",batch)
+if groups>=2: setflag("--batch-groups",groups)
+ncard=len(c["gpu"])
+fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
+if batch<2 and groups<2 and fbatch!=ncard:
+    print("NOTE: effective --batch %d on %d cards (accepted shapes: 6-card 6/3, 4-card 4/2)" % (fbatch,ncard))
+if fbatch%fgroups: print("WARNING: --batch %d not divisible by --batch-groups %d" % (fbatch,fgroups))
 json.dump(c,open(out,"w")); print("batch=",batch)
 PY
   # >>> AC922 adopted env (DECISIONS.md: PLE park) >>>

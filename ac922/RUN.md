@@ -37,7 +37,12 @@ here works without touching `configs/strata-nvfp4-final.json`.
    `gcc -O2 -shared -fPIC ac922/scripts/numabind.c -o numabind.so -ldl`.
 3. Start the lane:
    - 6-card: `GPUS=0,1,2,3,4,5 NB_CUT=0.5 bash ac922/scripts/strata-nvfp4-run.sh start`
-   - 4-card: `GPUS=0,1,2,3 NB_CUT=0.69 bash ac922/scripts/strata-nvfp4-run.sh start`
+   - 4-card: `GPUS=0,1,2,3 NB_CUT=0.69 STRATA_BATCH=4 STRATA_BATCH_GROUPS=2 bash ac922/scripts/strata-nvfp4-run.sh start`
+   Card count is a launch-time geometry, not a hot switch: `stop`, wait for per-card VRAM to
+   drop below the reserve, then `start` with the other env set (about 2-7 min to `loaded:true`).
+   `STRATA_BATCH`/`STRATA_BATCH_GROUPS` rewrite the pinned config's batch pair in place — the
+   6-card default (6/3) needs no override; pass 4/2 on a 4-card boot and check the geometry
+   line reports `2 groups of 2`.
    `NB_CUT` is the expert-arena NUMA split and must track the card:island ratio (0.5 for 3:3,
    0.69 for 3:1). The launcher calls `ple_park.sh 500` (splits the 48.8 GiB PLE page cache across
    both islands) and `LD_PRELOAD=numabind.so` (arena placement) — both are documented in
