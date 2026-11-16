@@ -85,3 +85,7 @@ hours of GPU burned on a lane that answered 200 OK while emitting exactly one to
   gated, i.e. unusable on a split.  Arms therefore always test chunk alone **and** chunk × every
   together, with the launched chunk read back from the engine's own startup banner — a config file
   is not evidence that a flag landed.
+- Chain capacity is priced separately from geometry: `eval/cap_probe.py` runs N conversations cold,
+  then sequentially, then concurrently, and reports the gap distribution *and* the serve RSS delta,
+  because `--prompt-cache` is charged per session (~118 MB/entry here) — a capacity fix that is not
+  budgeted is a pending OOM, not an optimization.
