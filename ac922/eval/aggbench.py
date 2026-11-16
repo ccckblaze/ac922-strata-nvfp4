@@ -31,6 +31,7 @@ FILL = ("Reimagine a lighthouse keeper logging nightly waves and distant ships; 
         "the ledger grows one careful paragraph at a time. ")
 REQ = re.compile(r"prompt (\d+) tokens = (\d+) reused \+ \d+ read in \d+ ms \(([\d.]+) tok/s\),"
                  r" (\d+) generated in \d+ ms \(([\d.]+) tok/s\), drafts accepted (\d+) of (\d+)")
+FIN = re.compile(r'"finish_reason":\s*"([a-z_]+)"')
 WIN = re.compile(r"batch \(([^)]*)\): (\d+) group-steps, (\d+) rows in (\d+) ms = ([\d.]+) rows/s")
 # The engine prints this per batch window anyway, so each burst can carry its own decomposition
 # instead of borrowing another machine's ledger: where the window time went, and how many rows
@@ -55,6 +56,7 @@ def stream_run(text, gen):
     first = last = None
     deltas = 0
     usage = {}
+    finish = None
     try:
         with urllib.request.urlopen(req, timeout=TMO) as x:
             for raw in x:
@@ -69,6 +71,9 @@ def stream_run(text, gen):
                     if first is None:
                         first = time.time() - t0
                     last = time.time() - t0
+                fm = FIN.search(body_txt)
+                if fm:
+                    finish = fm.group(1)
                 if "usage" in body_txt:
                     try:
                         usage = json.loads(body_txt).get("usage", usage)
@@ -78,13 +83,14 @@ def stream_run(text, gen):
         if e.code in (401, 403):
             raise SystemExit("AB-ERROR auth-%d: export STRATA_API_KEY first" % e.code)
         return {"first": None, "last": None, "ctok": 0, "ptok": None, "reused": None,
-                "error": "http-%d" % e.code}
+                "finish": "http-%d" % e.code, "error": "http-%d" % e.code}
     except Exception as e:                       # a timeout or a lane that died mid-burst is a
         return {"first": first, "last": last, "ctok": deltas, "ptok": usage.get("prompt_tokens"),
-                "reused": None, "error": type(e).__name__}   # result, not a hung night
+                "reused": None, "finish": finish, "error": type(e).__name__}   # result, not a hung night
     ctok = usage.get("completion_tokens") or deltas
     return {"first": first, "last": last, "ctok": ctok, "ptok": usage.get("prompt_tokens"),
-            "reused": (usage.get("prompt_tokens_details") or {}).get("cached_tokens")}
+            "reused": (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+            "finish": finish}
 
 
 def burst(payloads, gen):
@@ -102,6 +108,13 @@ def burst(payloads, gen):
 
 
 def calibrate(target, n):
+    """Find the payload length that lands the request at `target` prompt tokens.
+
+    The coarse pass (steps of `units`) converges to within 5%, which is fine for a 8K/50K shape
+    sweep but not for a full-window question: measured 2026-11-17 it parked at 234,300 for a
+    260,000 target (9.8% short), i.e. it would have answered "can we do 6 x 262K" about 6 x 234K.
+    So after the coarse pass, refine one unit at a time - a unit is ~24 tokens - to 1%.
+    """
     units = 20
     r = stream_run(FILL * units, 1)
     per = r["ptok"] / units
@@ -110,6 +123,15 @@ def calibrate(target, n):
         r = stream_run(("Stream 0 of %d marker. " % n) + FILL * units, 1)
         per = r["ptok"] / units
         if abs(r["ptok"] - target) <= 0.05 * target:
+            break
+    step = max(1, int(units * 0.01))
+    for _ in range(60):
+        err = target - r["ptok"]
+        if abs(err) <= 0.01 * target:
+            break
+        units += max(-step, min(step, int(err / per))) or (1 if err > 0 else -1)
+        r = stream_run(("Stream 0 of %d marker. " % n) + FILL * units, 1)
+        if not r["ptok"]:
             break
     return units, r["ptok"]
 
@@ -135,12 +157,22 @@ def main():
     rows = [m.groups() for m in REQ.finditer(data) if int(m.group(4)) == gen]
     wins = WIN.findall(data)
     rps = [int(w[2]) / max(1, int(w[1])) for w in wins]
-    # A stream that came back short (an engine refusal, a mid-stream error, a slot that never
-    # opened) rates itself absurdly high or absurdly low and poisons the aggregate. Keep only
-    # streams that delivered the asked generation, and say how many were dropped.
-    ok = [r for r in res if r["first"] is not None and r["last"]
-          and r["last"] - r["first"] > 0.05 and (r["ctok"] or 0) >= 0.9 * gen]
+    # A stream that came back short because the lane refused it (an error, a slot that never
+    # opened) rates itself absurdly high or absurdly low and poisons the aggregate, so it is
+    # dropped. A stream that came back short because the model chose to end its own turn is a
+    # healthy stream at temperature 0 and must be kept: measured 2026-11-17 at 6 x 234K with
+    # gen 1024, six concurrent streams returned `finish_reason=stop` after 322-714 tokens with
+    # tok_per_chunk 1.00, and the old >=0.9*gen guard threw all six away and made the lane look
+    # broken at full window. Distinguish the two by finish_reason, never by length alone.
+    def healthy(r):
+        if r["first"] is None or not r["last"] or r["last"] - r["first"] <= 0.05:
+            return False
+        if r.get("error"):
+            return False
+        return (r["ctok"] or 0) >= 0.9 * gen or r.get("finish") == "stop"
+    ok = [r for r in res if healthy(r)]
     dropped = n - len(ok)
+    early = sum(1 for r in ok if (r["ctok"] or 0) < 0.9 * gen)
     tg = [round((r["ctok"] - 1) / (r["last"] - r["first"]), 1) for r in ok]
     ttfts = [round(r["first"], 2) for r in ok]
     ends = [round(r["last"], 2) for r in ok]
@@ -153,6 +185,7 @@ def main():
            "ctok": sorted(set(r["ctok"] for r in res)),
            "reused_pct": round(100.0 * sum(r["reused"] or 0 for r in res) /
                                max(1, sum(r["ptok"] or 0 for r in res)), 1),
+           "early_stop": early, "finish": sorted(set(str(r.get("finish")) for r in res)),
            "span": span, "decode_live_s": live, "dropped_streams": dropped,
            "sum_tg": sum_tg, "wall_tg": wall_tg,
            "tg_med": round(st.median(tg), 1) if tg else None,
