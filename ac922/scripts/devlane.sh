@@ -139,6 +139,7 @@ def setflag(name,val):
 setflag("--max-context",mctx); setflag("--kv-resident",kvr)
 setflag("--conversation-cache-mib",ccmib); setflag("--conversation-cache-slots",ccslots)
 setflag("--resident-budget-gib",resgib)
+setflag("--spec-min-p",os.environ["DEV_SPEC_MIN_P"]) if os.environ.get("DEV_SPEC_MIN_P") else None
 setflag("--batch",str(len(glist))); setflag("--batch-groups","1")
 venv=os.path.join(src,"build-vision","bin","strata-vision")
 if vision=="0" or (vision=="auto" and not os.path.exists(venv)) or not isinstance(c.get("vision"),dict):
