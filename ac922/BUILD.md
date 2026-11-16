@@ -33,3 +33,19 @@ Notes specific to this platform:
   **torch-free** — graders run on plain stdlib + a vendored `nltk`/`pylibs` pair.
 - ggml is vendored frozen under `third_party/strata-ggml` (see `third_party/ggml/VERSION.txt`);
   no download step is required or performed.
+
+## Multimodal encoder (`strata-vision`, optional but ship default)
+
+The vision tower weights are **not compiled here** — they are `mmproj-F16.gguf` from the model
+download (see `RUN.md`). What you build is the CPU embedding helper `strata-vision`, which links
+the ggml/mtmd stack pinned to this engine's llama.cpp commit:
+
+```bash
+cmake -B build-vision -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_CURL=OFF
+cmake --build build-vision -j --target strata-vision
+# must be CPU-only: the process must not hold a CUDA context (vision.gpu=false is the adopted shape)
+```
+
+`-mcpu=power9` is picked automatically by ggml's native detection on this box (it implies VSX —
+an explicit `-mvsx` is redundant, and do not expect POWER10/11 paths: this compiler's autovectorizer
+targets ISA 2.07 + P9 scheduling).

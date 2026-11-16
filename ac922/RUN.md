@@ -9,6 +9,12 @@ MODEL_DIR=/data/work/Strata-data/models/nvfp4-gptq   # 17 files, see results/MOD
 LOGD=/data/champion
 ```
 
+Multimodal adds one optional asset under `MODEL_DIR` (`mmproj-F16.gguf`, ~904 MB, top level of
+`unsloth/Qwen3.8-Flash-Next-GGUF`) and the CPU encoder at `$SRC/build-vision/bin/strata-vision`
+(build: `BUILD.md`). Both are wired through the `"vision"` block in
+`configs/strata-nvfp4-final.json`; `VISION=0 bash scripts/strata-nvfp4-run.sh start` removes the
+block before launch for a text-only lane.
+
 The repository launcher (`scripts/strata-nvfp4-run.sh`) defaults `SRC` to this checkout and
 rewrites the reference config's paths from environment variables, so building here and running
 here works without touching `configs/strata-nvfp4-final.json`.
@@ -34,6 +40,7 @@ here works without touching `configs/strata-nvfp4-final.json`.
 
 | Gate | Tool | Pass condition |
 | --- | --- | --- |
+| Multimodal | image chat probe (`image_url`, OpenAI content-list shape) | `/health` reports `images: true`; a reference image parses; probe with `max_tokens ≥ 256` (this model spends the budget on `reasoning_content` first — `content: null` at low budgets is truncation, not failure) |
 | Lane evidence | `scripts/laneverify.sh http://127.0.0.1:8091 <engine-log>` | `max_context=262144`, geometry line `batch (pipelined, 3 groups of 2)` (6-card) or `2 groups of 2` (4-card), per-card VRAM 14.5–15.0 GiB, no stray containers |
 | Lane alive | `scripts/alive.py` (three real probes: arithmetic / GSM8K item / HumanEval exec) | `ALIVE OK failed=0` — any `503`/`ctok=1` result means the lane is NOT usable, do not run suites |
 | Determinism | `eval/bench_selftest.py`, `eval/selfcheck.py` | all OK, failures=0 |

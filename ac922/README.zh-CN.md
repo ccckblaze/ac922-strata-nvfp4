@@ -24,6 +24,12 @@
 精度（全量题库，errors = 0，预算体检干净）：**GSM8K 97.12%**（1,319 题）、
 **MATH500 89.40%**（500 题）、**HumanEval 96.95%**（164 题）。详见 `ACCURACY.md`。
 
+多模态默认开启：图像输入走 OpenAI `image_url` 消息格式，由纯 CPU 的 FP32 视觉塔
+（`strata-vision` + `mmproj-F16.gguf`）编码，参考图往返 2–4 s。对文本线实测代价：
+**VRAM 增量 0**；单流与满窗数字全部落在箱体漂移带内（262K 探针 pp 6,949 vs 7,016；
+6×245K 稳态聚合 156–169，插入图像探针前后同带）；18 行超订阅下图像请求只排队
+（TTFT 28–44 s）、不崩。启动时 `VISION=0` 可关。
+
 贯穿所有实验的容量法则：**N 卡 ↔ N 路满窗并发**（超订阅只排队、不崩——6 卡 8×245K 已验证）。
 
 ## 这里定档了什么
@@ -33,6 +39,8 @@
   在 ppc64le 上用 CUDA 12.4 面向 `sm_70` 构建。见 `BUILD.md`。
 - **模型资产**：Hugging Face [`Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata`](https://huggingface.co/Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata)
   —— 17 个文件，校验和见 `results/MODEL-SHA256SUMS.txt`（定版基线前全部验过）。
+  多模态另需 `unsloth/Qwen3.8-Flash-Next-GGUF` 中的 `mmproj-F16.gguf`（约 904 MB；
+  dense GGUF 本身早已带 `image-text-to-text` 任务声明和 `image_token_id`）。
 - **配置 + 启动器**：`configs/strata-nvfp4-final.json`、`scripts/strata-nvfp4-run.sh`
   （已参数化；生产布局记录在 `RUN.md`）。
 - **采纳/否决台账**（每个旋钮带实测增益）：`DECISIONS.md`。

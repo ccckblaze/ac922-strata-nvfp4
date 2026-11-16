@@ -26,6 +26,14 @@ when bit-exactness or risk justified it.
 | `--aux-cpus auto` | auto | offload helper work to spare cores | wall −12.9% (64K) / −13.3% (131K), thread-only, zero quality risk |
 | `--conversation-cache-mib 131072 --conversation-cache-slots 16` | ×5.3 budget | parked-chain capacity: recompute→restore −97% (65 s → 2 s) | pp/tg/VRAM regression 0.0% — pure config buys time |
 
+## Adopted — multimodal (vision), ship default on
+
+| Knob | Value | Why | Measured |
+| --- | --- | --- | --- |
+| config `"vision"` block + `--vision` | on (`VISION=0` opts out) | image input restored on the final lane; the dense GGUF already declares `image-text-to-text` and carries `image_token_id` — only the tower + encoder were missing | see RUN.md gates; ship default because the text-path cost measured zero |
+| `vision.gpu` | false | a GPU encoder would eat 1.2–1.4 GB of the expert cache (upstream `docs/NVFP4.md` ruling for this pack family) | VRAM delta 0 — the encoder process blocks its CUDA context and skips warm-up |
+| encoder precision | FP32 + floating-point attention | GPU BF16+FA drifted cosine by 11.2% on large images (0.1% on CPU FP32); x86 AVX-512 native builds have a "wrong and slow" precedent, so the VSX path is self-validated locally, not inherited | acceptance battery passed (RUN.md gate row): idle probes 2–4 s round trip, 6/6 probes clean inside a 6×245K + 6×8K + image mixed-shape load, text lane unchanged |
+
 ## Adopted — NUMA placement (POWER9 two-island box)
 
 | Item | What | Measured |

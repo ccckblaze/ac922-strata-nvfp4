@@ -25,6 +25,13 @@ actually ran; nothing is aspirational.
 Accuracy (full suites, errors = 0, budget audit clean): **GSM8K 97.12%** (1,319),
 **MATH500 89.40%** (500), **HumanEval 96.95%** (164). See `ACCURACY.md`.
 
+Multimodal is on by default: image input through the OpenAI `image_url` shape, encoded by a
+CPU-only FP32 tower (`strata-vision` + `mmproj-F16.gguf`, reference-image round trip 2–4 s).
+Measured cost to the text lane: **VRAM delta 0**, single-stream and full-window numbers inside
+box drift (262K probe pp 6,949 vs 7,016; 6×245K steady 156–169 agg with and without image
+probes interleaved); image requests under 18-row over-subscription queue (TTFT 28–44 s), never
+crash. `VISION=0` at launch opts out.
+
 Capacity rule that held across every experiment: **N cards ↔ N full-window streams**
 (over-subscription queues, never crashes — verified at 8 × 245K on 6 cards).
 
@@ -35,6 +42,8 @@ Capacity rule that held across every experiment: **N cards ↔ N full-window str
   branch compiles the measured engine. Built on ppc64le with CUDA 12.4 for `sm_70`. See `BUILD.md`.
 - **Model assets**: Hugging Face [`Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata`](https://huggingface.co/Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata)
   — 17 files, checksums in `results/MODEL-SHA256SUMS.txt` (all verified before the final baseline).
+  Multimodal additionally uses `mmproj-F16.gguf` from `unsloth/Qwen3.8-Flash-Next-GGUF` (~904 MB;
+  the dense GGUF already carries the `image-text-to-text` task declaration and `image_token_id`).
 - **Config + launcher**: `configs/strata-nvfp4-final.json`, `scripts/strata-nvfp4-run.sh`
   (parameterized; production layout documented in `RUN.md`).
 - **Adopted-knob ledger** with measured deltas and rejected tickets: `DECISIONS.md`.
