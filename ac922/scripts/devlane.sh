@@ -80,10 +80,43 @@ numa_args(){
     off) return 0;;
     [0-9]*) echo "numactl --cpunodebind=$DEV_NUMA --preferred=$DEV_NUMA"; return 0;;
   esac
-  local first=${DEV_GPUS%%,*} node
-  node=$(nvidia-smi topo -m 2>/dev/null | awk -F'\t' -v g="GPU$first" '$1==g{print $(NF-1)}')
-  [ -z "$node" ] && { echo ""; return 0; }
-  echo "numactl --cpunodebind=$node --preferred=$node"
+  # derive the single NUMA node of the dev cards: sysfs numa_node with the 8-digit PCI domain
+  # normalised (nvidia-smi prints 00000035:04:00.0, sysfs wants 0035:04:00.0); fall back to
+  # the "NUMA Affinity" column of `nvidia-smi topo -m` addressed by header position.
+  local node
+  node=$(/usr/bin/python3.11 - "$DEV_GPUS" <<'PY'
+import subprocess,sys
+want={x.strip() for x in sys.argv[1].split(",") if x.strip()}
+def norm(b):
+    p=b.split(":"); p[0]="%04x"%int(p[0],16); return ":".join(p).lower()
+topo=None
+def via_topo(idx):
+    global topo
+    try:
+        if topo is None: topo=subprocess.check_output(["nvidia-smi","topo","-m"],text=True).splitlines()
+        hdr=[c.strip() for c in topo[0].split("\t")]
+        k=[j for j,c in enumerate(hdr) if "NUMA Affinity" in c]
+        if not k: return None
+        for r in topo[1:]:
+            f=r.split("\t")
+            if f and f[0].strip()=="GPU"+idx: return f[k[0]].strip() or None
+    except Exception: pass
+    return None
+nodes=set()
+for l in subprocess.check_output(["nvidia-smi","--query-gpu=index,pci.bus_id","--format=csv,noheader"],text=True).splitlines():
+    i,b=[x.strip() for x in l.split(",",1)]
+    if i not in want: continue
+    a=norm(b); got=None
+    for p in ("/sys/bus/pci/devices/%s/numa_node"%a,"/sys/bus/pci/devices/%s/device/numa_node"%a):
+        try:
+            v=open(p).read().strip()
+            if v and v!="-1": got=v; break
+        except Exception: pass
+    nodes.add(got if got is not None else via_topo(i))
+if len(nodes)==1 and None not in nodes: print(nodes.pop())
+PY
+)
+  [ -n "$node" ] && echo "numactl --cpunodebind=$node --preferred=$node"
 }
 start(){
   local st; check; st=$?
