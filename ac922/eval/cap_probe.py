@@ -93,11 +93,11 @@ for i in range(NC):
 print("--- phase1: cold build %d conversations ---"%NC,flush=True)
 for i,t in enumerate(bases): ask(payload(t,i),"cold%d"%i,res)
 print("--- phase2: sequential continuations (small fresh tail) ---",flush=True)
-for i,t in enumerate(bases): ask(payload(t,i)+[{"role":"user","content":"Tail note %d: "%i+F[i]*30}],"seq%d"%i,res) if MULTI else ask(t+("Tail note %d: "%i)+F[i]*30,"seq%d"%i,res)
+for i,t in enumerate(bases): ask(payload(t,i)+[{"role":"user","content":"Tail note %d: "%i+unit(i)*30}],"seq%d"%i,res) if MULTI else ask(t+("Tail note %d: "%i)+unit(i)*30,"seq%d"%i,res)
 print("--- phase3: concurrent continuations ---",flush=True)
 th=[]
 for i,t in enumerate(bases):
-    txt=(payload(t,i)+[{"role":"assistant","content":"Ack %d."%i},{"role":"user","content":"Round %d: "%i+unit(i+1)*30}]) if MULTI else t+("Round %d continuation: "%i)+F[(i+1)%NC]*30
+    txt=(payload(t,i)+[{"role":"assistant","content":"Ack %d."%i},{"role":"user","content":"Round %d: "%i+unit(i+1)*30}]) if MULTI else t+("Round %d continuation: "%i)+unit(i+1)*30
     h=[]; th.append((threading.Thread(target=ask,args=(txt,"par%d"%i,res)),h))
 for x,_ in th: x.start()
 for x,_ in th: x.join()
