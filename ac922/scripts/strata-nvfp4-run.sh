@@ -74,6 +74,7 @@ def setflag(name,val):
         c["args"]+=[name,str(val)]
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
+if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"])
 ncard=len(c["gpu"])
 fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
 if batch<2 and groups<2 and fbatch!=ncard:
