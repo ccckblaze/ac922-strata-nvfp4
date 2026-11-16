@@ -40,16 +40,29 @@ change how the three gates above may be read:
   now send the key, exit 3 on 401/403, and `qualgate.sh` refuses to grade when rows are missing.
   Related hygiene: never resolve the engine log with `ls -t $LOGD/*.log | head -1` — that lands on
   the serve stdout log (or the other lane's), which is how pp/tg were being read back as `null`.
-- **Greedy output on this lane is bit-stable only at short horizons, so REF equality is a
-  same-boot invariant.**  Replaying one identical 30K-token request four times at
-  `temperature=0` against one running engine produced 3 distinct answers at 128 tokens and 4 at
-  512, with the first differing character at index **8** in half the pairs
-  (`eval/repro_probe.py`, numbers-only by construction).  Cross-boot early-cell divergence against
-  a stored REF is therefore inside the noise floor and is *not* evidence of a regression; it must be
-  adjudicated with `repro_probe.py` plus the aggregate accuracy anchors, and a REF re-baseline has
-  to be recorded as a deliberate act, not a way to make a FAIL go away.  What stays valid as a hard
-  gate: `det_same` over three runs inside one boot at the 32-token horizon, acceptance-rate drift,
-  and cold == cached equality (`selfcheck.sh`) at the same horizon.
+- **A hash cell is only meaningful at a controlled re-read depth.**  Greedy output on this lane depends
+  on how much of a prompt was re-prefilled versus restored: for one identical 54K prompt, `reused=0`
+  (cold), `reused=36864` (partial) and `reused=54028` (full relay) each give a different answer.  The
+  first `divprobe` therefore could not even reproduce itself inside one boot -- its baseline and check
+  passes ran at 54021 vs 54022 tokens re-read, which is a path change, not a numeric one.  Cells are now
+  fixed-per-prompt, primed once so every measured cell sits on the same relay depth, and `qualgate`
+  compares a cell only when REF's recorded `reused` matches exactly.
+- **The cold path is bit-stable; the long-context relay path is not, and the gap is measured.**  The
+  det fixture (8.5K prompt, 32 tokens, cold) reproduced the 2026-11-15 REF hash `bfd40ecd4692` exactly
+  after a full day of config adoptions -- so determinism holds where it was ever claimed.  But replaying
+  one identical 30K-token request four times at `temperature=0` in a single boot produced 3 distinct
+  answers at 128 tokens and 4 at 512, first differing character at index 8 in half the pairs; and at
+  *matched* depth, gate-to-gate runs still move 6 of 8 long relay cells (agreement ~2/8) while the cold
+  det fixture never moves (`eval/repro_probe.py`).  The floor scales with context, not with horizon
+  length alone.  So the gate is two-tier: **cold divergence = FAIL**, relay cells = **agreement rate
+  against REF**, failing only at total collapse (0/8) or when no cell is comparable.  Demanding bit-equality of a single long relay cell
+  would ask for something the lane cannot provide, and a gate nobody can pass is not a gate.
+- **What remains a hard invariant**: `det_same` over three runs in one boot at the 32-token horizon,
+  cold-path cell equality at recorded depth, `selfcheck.sh` cold == cached, and the aggregate accuracy
+  anchors (`ACCURACY.md`) -- which are what actually carry a quality claim across a config change.
+  Acceptance-rate drift is a *gross-collapse* sentinel only: it follows the suffix-draft model, which
+  learns from everything the lane served since boot (observed 0.81 against a REF written minutes
+  earlier in the same boot, 1.00 minutes later).
 
 ## 4. Lane acceptance before suites
 

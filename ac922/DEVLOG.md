@@ -139,6 +139,19 @@ each entry is a *result*, not a diary.
   cold != cached in roughly half of runs (Nov-14 history shows the same 5-of-9 pattern at
   `slots 4/16`), and it is the first-relay pass only -- passes 2 and 3 match cold.  Ticket owner:
   whoever chases the nondeterminism found by `repro_probe.py`.
+- Chasing that flake turned up the real shape of it, and it is bigger than the cell that kept failing:
+  at *matched* re-read depth, two gate runs in one boot disagree on 6 of 8 long-context cells
+  (agreement ~2/8), while the 8.5K cold fixture reproduced the 2026-11-15 REF hash bit-for-bit after a
+  day of config adoptions.  Output on this lane is therefore deterministic only for short prompts on
+  the cold path; long-context relay output has a genuine run-to-run floor.  The gate is rebuilt around
+  that fact (`divprobe` primes each depth and records exact `reused`; `qualgate` FAILs on cold
+  divergence and on total relay collapse, and treats a single drifted relay cell as WARN), because an
+  unsatisfiable gate is the same liability as a broken one -- it was exactly that for 24 h.
+  Open ticket, nobody has claimed it yet: find the source of the long-context relay nondeterminism
+  (candidates in order: nondeterministic reductions in the host-tier KV restore, expert-streaming
+  residency differing pass-to-pass, near-tie argmax with no stable tie-break).  Nothing in the adopted
+  capacity change depends on the answer -- the binary is unchanged since 11-15 13:07 and the Nov-14
+  `selfcheck` history already shows the intermittency.
 
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
