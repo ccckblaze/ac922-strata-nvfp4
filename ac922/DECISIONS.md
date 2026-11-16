@@ -60,3 +60,19 @@ when bit-exactness or risk justified it.
 | `STRATA_SPLIT_OWN=1`, `--prefill-head-alias`, `--peer-prefill-rows` | all buy PP with tg/VRAM — direction opposite to our objective | static + spot checks |
 | Reference lane S1 (IQ3_XXS Strata 0.1.41, accuracy replay) | **closed for accuracy**: the 2026-11-12 performance lane (port 8090, minimal flags, `STRATA_FETCH_PARTNER=0`) did work and its curves are published in `PERFORMANCE.md`; the later 0.1.41 accuracy-lane recreation (port 8092, extended flag set) never produced usable output — nine arms across two campaigns, death modes: verify timeout (#267), immediate-EOS, `decode -1` watchdog | full ledger in DEVLOG |
 | Reference lane M1 (llama.cpp Monster IQ3_XXS) | **closed for accuracy**: no usable endpoint under our grading shapes (chat stops after 1 token; bare completion is OOD); performance data remains valid and published | three repair attempts, all falsified |
+
+## Adopted — serving-layer parsing policy (outer parsing, no numeric path)
+
+`"undeclared_tool_calls": "call"` in `configs/strata-nvfp4-final.json` (upstream #4622; the serve
+layer's default is `"text"`). Deep-context requests sometimes emit a well-formed call of a tool the
+request did not declare. Under the default that call stays in the stream as assistant *text*, so a
+client that replays history pastes the leaked call markup back into the next prompt — the drift
+feeds on itself, and the turn never reaches the tool channel that would correct it. `"call"`
+returns it as a tool call instead, which lets the client answer with the names it really has.
+
+- Scope: outer parsing only (`serve/server.py` reads the config; the engine never sees it), so the
+  numeric path is untouched — verified by the two-tier gate (det x3 / cold-cell bitwise / relay
+  agreement) rather than asserted.
+- Only a span the parser reads as a whole call is returned; prose and quoted examples stay text.
+- Both lanes inherit it: the production launcher and the dev lane derive from this one file.
+
