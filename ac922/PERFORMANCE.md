@@ -67,6 +67,46 @@ Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot
 - `results/charts/ac922-paths-final-2026-11-15.png` — four-path final (V1 1Cat-vLLM appears only
   as a paper anchor, never ranked).
 
+## 4b. Window-shape family, 6 cards (2026-11-17 overnight sweep, `note312/shapes.jsonl`)
+
+Aggregate decode, published caliber (`sum_tg` = sum of the streams' own rates), at six concurrent
+streams; `solo` is one stream at the same depth. Cold prefills are outside the measurement (each
+payload is warmed first), so this table reads decode only.
+
+| arm | slots/groups x rows | 8K | 50K | 98K | 131K | solo 8K | solo 50K |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **A1 (shipped)** | 6, 3g x 2r | **228** | **201** | **179** | 135 | 84.5 | 72.8 |
+| A2 | 6, 2g x 3r | 140 | 158 | 139 | 128 | trunc | trunc |
+| A3 | 6, 1g x 6r | 92 | 96 | 86 | 75 | 78.8 | 72.3 |
+| A4 | 8, 2g x 4r | 134 | 158 | 139 | 124 | - | 49.2 |
+| A5 | 8, 4g x 2r | 143 | 181 | 161 | 136 | - | 50.5 |
+| A6 | 6, 2g x 3r + `--batch-max-context 65536` | 152 | 160 | 63* | 62* | 85.5 | 72.2 |
+| A7 | 6, 2g x 3r + `--trim-stage-weights` | 202 | 173 | 147 | 140 | - | 77.7 |
+| A8 | 6, 6g x 1r (the engine's own `auto`) | 157 | 186 | 166 | 143 | 78.1 | 77.6 |
+| A9 | 8, 8g x 1r | 148 | 183 | 162 | 141 | - | 48.9 |
+| A10 | A5 + `STRATA_COALESCE_PREFILL=4` | 147 | 176 | 156 | 113 | 71.1 | - |
+| A11 | 6, 3g x 2r + `--trim-stage-weights` | 234 | 210 | - | **154** | trunc | trunc |
+
+`*` A6's deep points left the slots and ran on the solo path: each stream decoded at ~75 tok/s
+(`sum_tg` 432/454) but they did **not** overlap, so the honest aggregate is the `wall_tg` column -
+63 tok/s, against 90.6 for A1 at the same depth. `trunc` = the solo request came back short (see
+the defect note in `DECISIONS.md`); those cells are not speed measurements.
+
+What the family says, on this box:
+
+- **Two rows per group is the ceiling of useful sharing.** 2 rows -> 228, 3 rows -> 140, 6 rows in
+  one window -> 92. Multi-row windows cost more than the shared expert reads buy: per-row QSA
+  scoring on Volta is compute-bound and grows superlinearly, and the streamed-weight saving that
+  motivates batching upstream is small here because experts already stream from RAM over NVLink2.
+- **More slots than cards loses.** 8 slots shrinks the per-card expert cache (2924 -> 2749 slots,
+  7.53 -> 7.08 GiB; the last stage 2236 -> 2022) and every 8-slot arm measured below the 6-slot
+  arm at its same rows/group. The capacity rule stands: slots = cards.
+- **`--trim-stage-weights` is the only lever that lifted a shape** (A2 140 -> A7 202; A1 228 -> A11
+  234, and at 131K 135 -> 154). It needs an explicit `--layer_split`, so it is a config change, not
+  an env flip - and it arrived with a truncation symptom that is not yet explained.
+- **`STRATA_COALESCE_PREFILL` does not move decode** (A5 143 vs A10 147) - it is a prefill-side
+  switch, as documented.
+
 ## 5. Decode window anatomy (why tg behaves the way it does)
 
 From the engine's own `STRATA_DECODE_TIMING` on this box: the dominant term is the **expert

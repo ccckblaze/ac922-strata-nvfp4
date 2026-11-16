@@ -76,3 +76,29 @@ returns it as a tool call instead, which lets the client answer with the names i
 - Only a span the parser reads as a whole call is returned; prose and quoted examples stay text.
 - Both lanes inherit it: the production launcher and the dev lane derive from this one file.
 
+## Shape sweep verdict (2026-11-17): the shipped window shape stays
+
+The overnight family (11 arms, `PERFORMANCE.md` §4b) says the shipped `--batch 6 --batch-groups 3`
+is the best point on this box at short and mid depth, and that aggregate decode here is limited by
+**rows per group**, not by card count: 2 rows/group 228 -> 3 rows/group 140 -> one window of 6 rows
+92. Slots above the card count cost expert-cache VRAM and lose. Nothing adopted.
+
+Two candidates stay priced rather than adopted:
+
+- **`--trim-stage-weights` + explicit `--layer_split 8,16,24,32,40`.** The only lever that lifted a
+  shape (same 2-rows shape: 140 -> 202; shipped shape: 228 -> 234, and at 131K 135 -> 154).
+  Blocked by an unexplained symptom: on all three trim arms the *solo* panel point returned a
+  truncated generation (`ctok` 18 of 256 asked, at 07:26 on A11, and A2/A7 show the same hole).
+  Until that is reproduced and root-caused, it does not go on the production lane.
+  Ticket: **D1 - solo request truncates under explicit split + trim**.
+- **`--batch-max-context 65536`** (elastic slots): requests over ~64K leave the slots and run on the
+  solo path, where each gets single-stream speed (~75 tok/s at 98K instead of 21-24). It is a
+  latency option for deep workloads, not a throughput one - aggregate falls from 90.6 to 63 at
+  131K because the deep streams then take turns. Keep as an opt-in mode, documented, unadopted.
+
+Caliber note for anyone reading the earlier tables: the deep single-stream figures published before
+this sweep (tg 72.5 at 261,494 ptok) were **64-token generations** - they measure the drafting
+ramp, not steady decode. Steady deep decode at 131K with a long generation is ~72-85 solo and
+21-24 per stream when six of them share the lane. Both calibers are now produced by
+`ac922/eval/aggbench.py`, which refuses to score a stream that came back short.
+
