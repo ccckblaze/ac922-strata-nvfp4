@@ -14,18 +14,22 @@
 > MATH500 89.40 / HumanEval 96.95。每个数字都有实测出处，每个开关都有采纳或否决的账；克隆本仓库即可编译、
 > 复现我们跑分的那台引擎。
 
-![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v2-2026-11-16.png)
+![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v3-2026-11-17.png)
 
 ## The numbers (all measured on this box)
 
-| | **6-card lane (B6)** | 4-card lane (B4) |
+| | **4-card lane (shipped)** | 6-card lane (reference) |
 | --- | ---: | ---: |
-| Max context, live | **262,144** (probe 261,494 passes) | **262,144** |
-| Cold prefill @ 262K | **7,016 tok/s** | 5,120 tok/s |
-| Single-stream decode @ 8K / @ 262K | 66.0 / 72.5 tok/s | 57.2 / 57.1 tok/s |
-| Full-window concurrency | **6 × 245K live · agg 166.4** (23.4/stream) | 4 × 245K · agg 93.5 (21.6/stream) |
-| Short-window concurrency @ 8K | agg 218.2 (35.7/stream) | agg 133.6 (33.3/stream) |
-| VRAM resident · RAM pinned | 87.7 GiB · 47.7 GiB | 58.6 GiB · 47.7 GiB |
+| Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
+| Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
+| Single-stream decode @ 8K / @ 210K | 77.3 / 70.0 tok/s | 84.8 / 82.7 tok/s |
+| Full-window concurrency | 4 × 262,136 live · agg 108.1 (23.7–30.7/stream) | 6 × 262,136 live · agg 155.0 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 135.6 (33.7/stream) | agg 218.2 (35.7/stream, pre-adopt) |
+| VRAM resident · RAM pinned | 58.6 GiB · 57.65 GiB | 87.7 GiB · 47.7 GiB |
+
+Rows are the adopted ship state measured 2026-11-17 (`learned expert-profile` +
+`--trim-stage-weights` + the batched pipelined ring); the two cells marked *pre-adopt* are the
+best 6-card aggregate numbers we hold and have not been re-taken since adoption.
 
 Accuracy, full suites, errors = 0, budget audit clean: **GSM8K 97.12%** (1,319) · **MATH500 89.40%** (500) · **HumanEval 96.95%** (164)
 
@@ -47,10 +51,10 @@ Capacity rule that survived every experiment: **N cards ↔ N full-window stream
 | Mechanism | What it buys |
 | --- | --- |
 | Routed experts pinned in host RAM, hot set cached in VRAM | HBM stays free for KV → the full 262K window fits on 16 GB cards |
-| Batched pipelined ring (`--batch 6 --batch-groups 3`) | FIFO → six real streams; aggregate decode **+74%** |
+| Batched pipelined ring (shipped 4-card `--batch 4 --batch-groups 2`; 6-card 6/3) | FIFO → N real streams on N cards; aggregate decode **+74%** |
 | MTP drafting *inside* the batched window | per-stream speed survives batching |
 | NUMA arena binding + PLE page-cache parking | kills POWER9 remote reads; tg +1.0–1.4%, placement 100% on target |
-| Conversation cache 128 GiB / 16 slots | recompute → restore **−97%** (65 s → 2 s) with zero pp/tg/VRAM regression |
+| Conversation cache 48 GiB / 32 slots | recompute → restore **−97%** (65 s → 2 s) with zero pp/tg/VRAM regression; the 96 GiB half was later traded for deep-window aggregate (+24%) |
 | Bit-exact sm70 kernels | Volta decode gains at provably zero quality risk |
 
 ## Reproduce it

@@ -255,3 +255,33 @@ not single runs:
 
 Config: `ac922/configs/strata-nvfp4-final.json` (`--expert-profile .../expert-profile-learned.bin`
 rewritten to the repo copy, `--trim-stage-weights`); profile file committed under `data/`.
+
+## Adopted: the ship geometry is 4-card, and the launcher derives shape from card count (2026-11-17)
+
+Cards 4/5 are needed by the dev/iteration lane, so the published ship state is the 4-card geometry.
+Switching also removed a real footgun: the reference config carried the 6-card batch pair, so a
+4-card boot was correct only if the operator remembered to pass four variables.
+
+- Config now ships `gpu [0,1,2,3]` with `--batch 4 --batch-groups 2`; the launcher derives the batch
+  pair and `NB_CUT` from the card count (4 → 4/2 with `NB_CUT=0.69`, 6 → 6/3 with `NB_CUT=0.5`),
+  so `bash ac922/scripts/strata-nvfp4-run.sh start` alone boots production and a geometry switch is
+  one variable. Verified offline against both shapes without disturbing the live lane:
+  `auto batch shape for 4 cards: 4/2`, `auto batch shape for 6 cards: 6/3`.
+- Geometry evidence on the live boot: `layer split: layers 0-8 (CUDA0), 9-21 (CUDA1), 22-34
+  (CUDA2), 35-47 (CUDA3)`, `batch (pipelined, 2 groups of 2)`, `STRATA_PIPED_MTP ... 1 MTP proposal
+  per slot each window`, expert caches 4100/4097/3339 slots + CUDA0 dense stage, resident pinned
+  57.65 GiB, VRAM 14.6/14.5/14.5/14.9 GiB, cards 4/5 at 225/13 MiB (free).
+- Per-geometry REF rule from the 6-card switch section, now exercised in the other direction: warm
+  up, preserve the old anchor (`REF-6card-adopted-20261117.json`), `qualgate.sh baseline`, then
+  `check` in the same boot. Result: `det` x3 `bfd40ecd4692` — **bit-identical across the geometry
+  switch**, `acc-drift-ok 1.003`, `QUALGATE-PASS`, relay 3/8 (inside the same-config replay noise
+  band established today, which is why the rate is reported and never used as the verdict).
+- Numbers (one boot, same harnesses as the 6-card adopted state): single stream tg 77.3@8K,
+  71.8@54K, 73.0@65K, 69.1@110K, 72.0@165K, 70.0@210K; `aggbench` 8K×4 sum_tg 135.6 (per 33.7),
+  245K×4 sum_tg 100.2 (per 24.4); full window 4×261,632+512 all exact at 262,136 with sum_tg 108.1.
+  Against the 4-card pre-adopt baseline that is +35% short-window single stream, +7% at 245K×4,
+  flat at 8K×4 — the short-window aggregate is admission-bound, so residency tickets do not show up
+  there. Full table and the caliber caveats: `PERFORMANCE.md` §6d.
+- Not claimed: the adopted 6-card *aggregate* decode was never re-measured with `aggbench` (the
+  218.2 / 166.4 cells are pre-adopt), and the 6-card lane has no 65K point from today. Both are
+  marked in the chart and in §6d rather than smoothed over.

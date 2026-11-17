@@ -10,17 +10,21 @@ actually ran; nothing is aspirational.
 
 ## Headline numbers (final baseline, all measured on this box)
 
-| Metric | 6-card lane (B6) | 4-card lane (B4) |
+| Metric | **4-card lane (shipped)** | 6-card lane (reference) |
 | --- | ---: | ---: |
-| Max context, live | **262,144** (probe 261,494 passes) | **262,144** |
-| Cold prefill @ 262K | **7,016 tok/s** | 5,120 tok/s |
-| Cold prefill @ 6.8K / 54K | 2,246 / 5,154 | 1,488 / 3,970 |
-| Single-stream decode @ 8K | 66.0 tok/s | 57.2 tok/s |
-| Single-stream decode @ 262K | 72.5 tok/s | 57.1 tok/s |
-| Full-window concurrency | **6 × 245K live, agg 166.4 tok/s** (23.4/stream) | 4 × 245K, agg 93.5 (21.6/stream) |
-| Short-window concurrency @ 8K | agg 218.2 (35.7/stream) | agg 133.6 (33.3/stream) |
-| VRAM resident | 87.7 GiB (≈14.5–15.0/card) | 58.6 GiB |
-| Host RAM pinned | 47.7 GiB | 47.7 GiB |
+| Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
+| Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
+| Cold prefill @ 6.8K / 54K | 2,069 / 4,154 | 2,495 / 6,069 |
+| Single-stream decode @ 8K | 77.3 tok/s | 84.8 tok/s |
+| Single-stream decode @ 210K | 70.0 tok/s | 82.7 tok/s |
+| Full-window concurrency | 4 × 262,136 live, agg 108.1 tok/s (23.7–30.7/stream) | 6 × 262,136 live, agg 155.0 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 135.6 (33.7/stream) | agg 218.2 (35.7/stream, pre-adopt) |
+| VRAM resident | 58.6 GiB (14.5–14.9/card) | 87.7 GiB (≈14.5–15.0/card) |
+| Host RAM pinned | 57.65 GiB | 47.7 GiB |
+
+The shipped column is the adopted state measured 2026-11-17 in one boot (`eval/cphase.py` arms,
+`aggbench`, `fullwindow.py`); the *pre-adopt* cell is the best 6-card aggregate we hold and has not
+been re-taken since adoption. Full table with calibers: `PERFORMANCE.md` §6d.
 
 Accuracy (full suites, errors = 0, budget audit clean): **GSM8K 97.12%** (1,319),
 **MATH500 89.40%** (500), **HumanEval 96.95%** (164). See `ACCURACY.md`.

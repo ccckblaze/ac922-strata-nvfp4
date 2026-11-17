@@ -1,7 +1,8 @@
 # Performance — final baselines and cross-stack comparison
 
-All rows are measured on this AC922. The final lane is **B6** (6-card) with the adopted state in
-`DECISIONS.md`; **B4** is the same config restricted to GPU 0-3.
+All rows are measured on this AC922. The shipped lane is **4-card** (section 6d); **B6**/**B4**
+below are the same geometries measured *before* the residency tickets were adopted, kept as the
+delta reference.
 
 ## 1. Final baseline (Wave B, two boots, geometry as the only variable)
 
@@ -66,6 +67,9 @@ Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot
   aggregate / reach / same-length slices / resource bill / accuracy.
 - `results/charts/ac922-paths-final-2026-11-15.png` — four-path final (V1 1Cat-vLLM appears only
   as a paper anchor, never ranked).
+- `results/charts/ac922-samelen-v3-2026-11-17.png` — the same panorama re-taken on the shipped
+  4-card state, with both NVFP4 ladders measured in one protocol on 2026-11-17 (generator:
+  `results/charts/plot-samelen-v3-2026-11-17.py`).
 
 ## 4b. Window-shape family, 6 cards (2026-11-17 overnight sweep, `note312/shapes.jsonl`)
 
@@ -219,3 +223,40 @@ deep-window single runs carry +/-15-25% boot noise, so the table reads family me
 
 The CC 96 -> 48 prediction from the previous draft is closed in 6b; no open items remain in this
 section.
+
+### 6d. The shipped geometry is 4-card (2026-11-17, adopted config, one boot)
+
+Cards 4/5 go back to the dev/iteration lane, so the ship state is the 4-card shape: `gpu [0,1,2,3]`,
+`--batch 4 --batch-groups 2` (the launcher now derives that pair and `NB_CUT=0.69` from the card
+count, so `start` with no env is the production command). Everything below is one boot of the
+adopted config, measured with the same harnesses as 6c so the two geometries are directly
+comparable.
+
+| Item | 4-card adopted | 6-card adopted (6c) | 4-card before (B4) |
+| --- | ---: | ---: | ---: |
+| tg 8K single stream | **77.3** | 84.8 | 57.1 |
+| tg 54K / 110K / 165K / 210K | 71.8 / 69.1 / 72.0 / 70.0 | 76.0 / 77.8 / 82.2 / 82.7 | 64.8 / — / — / — |
+| tg 65K single stream | 73.0 | not measured | 62.4 |
+| cold pp 54K / 110K / 210K | 4,154 / 4,158 / 3,704 | 6,069 / 6,004 / 5,431 | 3,970 / 4,162 / — |
+| 8K x 4 aggregate (`aggbench`) | **135.6** sum_tg, wall_tg 110.3, per-stream 33.7 | (6 x 8K 218.2, pre-adopt) | 133.6 |
+| 245K x 4 aggregate (`aggbench`) | **100.2** sum_tg, wall_tg 77.8, per-stream 24.4 | (6 x 245K 166.4, pre-adopt) | 93.5 |
+| full window 4 x 261,632 + 512 | **all exact**, prompt+gen 262,136, span 22.6 s, sum_tg **108.1**, per-stream 23.7-30.7 | 6 x exact, sum_tg 155.0 | not measured at the true ceiling |
+| cold 262K prefill, single stream | ttft 52.7 s (pp ~4,964) | — | — |
+| warm 262K decode, single stream | 55.9 tok/s (EOS after 456) | — | — |
+| VRAM / RAM | 14.6/14.5/14.5/14.9 GiB, Σ 58.6 · resident pinned 57.65 GiB | 87.7 GiB Σ · 47.7 pinned | 58.6 GiB Σ · 47.7 pinned |
+
+- Shape evidence: `batch (pipelined, 2 groups of 2)`, `rows_per_step 3.35`, `STRATA_PIPED_MTP`
+  drafting one MTP proposal per slot per window - the 4-card geometry runs the same batched ring,
+  not a degraded one.
+- Quality: `det` x3 reproduced `bfd40ecd4692`, **bit-identical to the 6-card REF across the geometry
+  switch** (the det fixture does not see residency), gate `QUALGATE-PASS` with acc-drift 1.003
+  against a freshly written 4-card `REF.json`; the 6-card anchor is preserved beside it as
+  `REF-6card-adopted-20261117.json`.
+- What the tickets bought at 4 cards: short-window single stream +35% (57.1 → 77.3), deep single
+  stream +8-11% over B4, 245K x 4 aggregate +7%, 8K x 4 aggregate flat (+1.5%) - concurrency at
+  short windows is admission-bound, not residency-bound, which is why the same +35% does not appear
+  in the aggregate column.
+- Honest gap: the adopted 6-card *aggregate* was never re-measured with `aggbench`, so the 218.2 /
+  166.4 cells above are pre-adopt. Reading 4-card adopted against them understates the 6-card ship
+  state; the comparison that is fully same-day and same-harness is the single-stream ladder and the
+  true-ceiling full-window row.

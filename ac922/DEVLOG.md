@@ -153,6 +153,33 @@ each entry is a *result*, not a diary.
   capacity change depends on the answer -- the binary is unchanged since 11-15 13:07 and the Nov-14
   `selfcheck` history already shows the intermittency.
 
+## Phase G — residency tickets adopted, ship geometry moved back to 4 cards (11-17)
+
+- The day's tool is `eval/cphase.py`: it boots an arm, waits for health, runs det + a deep ladder +
+  an 8K×N concurrency burst, stops, and moves to the next arm, with arms chained so a whole family
+  lands unattended. Two defects found while building it: a launcher whose stdout is captured through
+  a pipe never reaches EOF because the daemon's grandchild keeps the pipe open (boot hangs), and
+  deep-window single runs carry ±15-25% boot noise, so no single cell decides anything — verdicts are
+  family medians plus a "winner's min > control's max" bar.
+- Adopted pair: `expert-profile-learned.bin` (trained 11-14 for this pack and shipped *unused*) +
+  `--trim-stage-weights`.  Single stream 8K 57.1 → 77.9 (6-card boot), full-window 6×262,136
+  `sum_tg` 148.5 → 155.0. `--adapt-every 0` measured neutral next to the profile, so adaptation
+  stays on.
+- Gate discipline hardened the same day, twice: the det fixture had been grading the *cold first run*
+  of a boot (run 0 pp 2550 → different hash; runs 1-2 → REF hash), and a cross-boot `relay-collapse
+  0/8` FAIL was boot noise — the same default config scores 0-2/8 against its own REF across boots.
+  Cross-boot relay cells carry no verdict; same-config reproducibility does (the adopted boot scored
+  8/8).
+- Ship geometry then moved to 4 cards so 4/5 could go back to the dev lane. The reference config had
+  carried the 6-card batch pair, so a 4-card boot was only correct if the operator remembered four
+  environment variables; the launcher now derives the batch pair and `NB_CUT` from the card count.
+  Re-anchoring the quality reference per geometry, `det` came back bit-identical across the switch
+  (`bfd40ecd4692`) — the cold path does not see residency, which is exactly why it is the anchor.
+- 4-card adopted state: single stream 77.3@8K / 70.0@210K, `aggbench` 8K×4 135.6 and 245K×4 100.2,
+  4×261,632+512 all exact at the true ceiling with `sum_tg` 108.1, VRAM 58.6 GiB, RAM pinned 57.65.
+  Honest gap kept in the open: the adopted 6-card aggregate was never re-taken with `aggbench`, and
+  short-window aggregate did not move with the residency tickets (+1.5%) — it is admission-bound.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
