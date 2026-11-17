@@ -76,6 +76,16 @@ bash ac922/scripts/lane4.sh start      # prod lane, 4 cards (default, geometry-g
 bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
 ```
 
+- **Deep windows on two cards need a different shape than the ship lane.** The config the shipped
+  lane runs (`--resident-budget-gib 64 --vram-reserve-mib 832 --batch <cards>`) dies on two cards at
+  >=96K prompts: first `ggml-cuda (strata mmq): out of memory`, then the stall watchdog killing a slow
+  engine. The verified dev shape is
+  `DEV_BATCH=1 DEV_KV_RESIDENT=8192 DEV_MAX_CONTEXT=163840 DEV_RESIDENT_GIB=40 STRATA_WATCHDOG_S=600
+   DEV_FLAGS="--vram-reserve-mib 3072" bash ac922/scripts/devlane.sh start`.
+  It holds a 126K window, but its decode window costs ~200 ms and is host-CPU-expert dominated, so use
+  it for build checks, deep-window availability and bit-exactness - not to price a decode kernel
+  (`DEVLOG.md` H.1).
+
 - **Occupancy guard**: `start` refuses if any process holds the dev cards — cards 4/5 may
   belong to a cooperating thread (e.g. I2V); preempt only deliberately with `FORCE=1`.
 - **NUMA**: GPU3-5 are the node8 NVLink triangle (cpus 88-175), GPU0-2 the node0 triangle.
