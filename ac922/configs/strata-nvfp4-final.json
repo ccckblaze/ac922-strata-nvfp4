@@ -44,7 +44,7 @@
   "--resident-budget-gib",
   "64",
   "--vram-reserve-mib",
-  "700",
+  "1024",
   "--aux-cpus",
   "auto",
   "--batch",

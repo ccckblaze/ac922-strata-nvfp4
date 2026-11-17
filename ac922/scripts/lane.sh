@@ -68,18 +68,28 @@ engine_log(){ # the launcher writes the real path into the run json; trust that,
   [ -f "$rj" ] && python3.11 -c "import json;print(json.load(open('$rj'))['log'])" 2>/dev/null
 }
 engine_pid(){ pgrep -f "build/strata --serve" | head -1; }
-boot_slice(){ # THIS boot's engine-log lines only.  The engine log is appended across boots, so
-  # "the last shape line" and "any NUMA line in the file" are both stale by construction: measured
-  # 2026-11-17, a 6-card boot read back as "2 groups of 2" because the newest runtime stats line
-  # still belonged to the 4-card lane that ran before it.  Prefer the recorded byte offset; fall
-  # back to the last per-boot startup marker when someone booted without this script.
-  local L=$1 off=0 n
+serve_log(){ # the newest per-boot serve stdout, which is where the supervisor writes restart causes
+  ls -1t "$LOGD"/strata-nvfp4-*.log 2>/dev/null | grep -vE 'engine|dev' | head -1
+}
+boot_slice(){ # THIS engine process's log lines only.
+  # Two traps, both measured 2026-11-17.  (1) The engine log is appended across lane boots, so "the
+  # last shape line" or "any NUMA line in the file" is stale by construction - a 6-card boot read back
+  # as "2 groups of 2" because the newest runtime stats line still belonged to the 4-card lane before
+  # it.  (2) The serve supervisor restarts a dead engine *inside* one lane boot (an
+  # `mtp: round capture: out of memory` respawned the 4-card lane 27 minutes after a clean
+  # lane.sh start), so the recorded byte offset is only a floor: anchor on the newest per-process
+  # startup banner when the file has one, else the pool line gets counted twice and geometry "fails".
+  local L=$1 off=0 want=0 b
   [ -f "$STATE" ] && off=$(sed -n 's/^off=//p' "$STATE" | head -1)
-  if [ "${off:-0}" -gt 0 ] 2>/dev/null && [ "$off" -le "$(stat -c %s "$L")" ]; then
-    tail -c +$((off + 1)) "$L"
-  else
-    n=$(grep -an "pipelined groups of" "$L" | tail -1 | cut -d: -f1)
-    sed -n "${n:-1},\$p" "$L"
+  want=${off:-0}
+  b=$(grep -aob "engine started:" "$L" | tail -1 | cut -d: -f1)
+  [ -n "$b" ] && [ "$b" -gt "${want:-0}" ] 2>/dev/null && want=$b
+  if [ "${want:-0}" -le 0 ] 2>/dev/null; then
+    b=$(grep -aob "pipelined groups of" "$L" | tail -1 | cut -d: -f1)
+    [ -n "$b" ] && want=$b
+  fi
+  if [ "${want:-0}" -gt 0 ] 2>/dev/null && [ "$want" -le "$(stat -c %s "$L")" ]; then
+    tail -c +$((want + 1)) "$L"
   fi | tr '\r' '\n'
 }
 verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engine log at $L"; return 1; }
@@ -115,6 +125,19 @@ verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engin
   # by the LD_PRELOAD evidence above (the shim prints nothing on success).  Open ticket, unchanged:
   # the complement still lands by first touch, which is why remote reads persist at 6 cards.
   [ "$firsttouch" = 0 ] || log "  note  : expert complement placed by first touch (pack has no per-role sizes) - known, not a regression"
+  # Liveness inside this lane boot.  A respawn is geometry-neutral but it means the lane died, and
+  # the numbers taken before and after it are not one continuous run: measured 2026-11-17, the
+  # 4-card lane took `mtp: round capture: out of memory` on a gate fixture 27 min after a clean
+  # start, the supervisor brought it back, and `lane.sh status` still looked healthy.  Report it.
+  local rl boots why loff
+  loff=$(sed -n 's/^off=//p' "$STATE" 2>/dev/null | head -1); loff=${loff:-0}
+  boots=$(grep -aob "engine started:" "$L" 2>/dev/null | cut -d: -f1 | awk -v o="$loff" '$1>=o{c++} END{print c+0}')
+  if [ "${boots:-0}" -gt 1 ]; then
+    rl=$(serve_log)
+    why=$([ -n "$rl" ] && grep -a "the engine reported an error" "$rl" | tail -1 | cut -c1-120)
+    log "  WARN  : the engine has restarted ${boots} times inside this lane boot - numbers span processes"
+    [ -n "$why" ] && log "          cause as logged: ${why##*] }"
+  fi
   log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_GROUPS groups of 2, shim loaded"
 }
 reanchor(){ # REF is per geometry (DECISIONS.md): keep the old anchor, write this shape's, then check
