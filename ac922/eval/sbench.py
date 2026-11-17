@@ -56,6 +56,12 @@ def main():
             print(json.dumps({"stop":ch.get("finish_reason"),"ctok":u.get("completion_tokens"),"chars":len(c),"hash":h}))
     if cmd=="det":
         text,n=build(10000); text="QFIX20261113 "+text; print("det base tokens",n)
+        # Warm the fixture first, ungraded.  The first request of a boot prefills this prompt cold,
+        # and cold prefill and cached replay are not the same numeric path on this lane (measured
+        # 2026-11-17 on the CC 48 GiB boot: run 0 pp=2550 tok/s -> hash 3acf024dbb26, runs 1-2
+        # pp=51 -> hash bfd40ecd4692, which is exactly REF).  Grading run 0 against a REF written
+        # warm reports a deterministic lane as det-nondeterministic, so grade only warmed runs.
+        w=ask(text,32); print("det warm", w.get("hash","")[:12], "pp", w.get("pp"))
         for i in range(3): print(json.dumps(ask(text,32)))
     elif cmd=="long":
         for tgt in [8000,64000,131000,196000,249000]:
