@@ -36,14 +36,23 @@ here works without touching `configs/strata-nvfp4-final.json`.
 2. Build the engine (`BUILD.md`) and, if this box has two NUMA islands like ours, the shim:
    `gcc -O2 -shared -fPIC ac922/scripts/numabind.c -o numabind.so -ldl`.
 3. Start the lane:
-   - 4-card (the shipped shape): `bash ac922/scripts/strata-nvfp4-run.sh start`
-   - 6-card: `GPUS=0,1,2,3,4,5 bash ac922/scripts/strata-nvfp4-run.sh start`
-   Card count is a launch-time geometry, not a hot switch: `stop`, wait for per-card VRAM to
-   drop below the reserve, then `start` with the other env set (about 2-7 min to `loaded:true`).
+   - 4-card (the shipped shape): `bash ac922/scripts/lane4.sh start`
+   - 6-card: `bash ac922/scripts/lane6.sh start`
+   Both are two-line shortcuts over `lane.sh <4|6> <start|stop|restart|status>`, which is the thing
+   that actually knows how to boot this box: it sources the machine layout (`LANE_ENV`, default
+   `/data/work/lane.env`, template `scripts/lane.env.example`), refuses to start when the NUMA shim
+   is missing, waits for `/health`, then proves the geometry from the engine's own lines — the
+   `batch (pipelined, 2 groups of 2)` shape, the stage count, and zero `NUMA placement FAILED` /
+   `remote reads` lines — and prints `GEOMETRY-PASS` or fails loudly.  Add `--reanchor` after a
+   geometry change to preserve the old REF and write this shape's anchor in one go.
+   Use the bare launcher (`strata-nvfp4-run.sh start`, `GPUS=... NB_CUT=... STRATA_BATCH=...`) only
+   when you are deliberately overriding a knob: it takes the repo-relative layout by default, and a
+   boot that misses `LD_PRELOAD=numabind.so` is silently not comparable (measured 2026-11-17).
+   Card count is a launch-time geometry, not a hot switch: `lane.sh <cards> restart` stops, waits
+   for per-card VRAM below the reserve, boots the other shape and re-verifies (2-7 min to health).
    The launcher derives the batch pair and the NUMA cut from the card count (4-card 4/2 with
-   `NB_CUT=0.69`, 6-card 6/3 with `NB_CUT=0.5`), so switching geometry is one variable;
-   `STRATA_BATCH`/`STRATA_BATCH_GROUPS`/`NB_CUT` still override it for experiments. Check the
-   geometry line reports `2 groups of 2` on a 4-card boot.
+   `NB_CUT=0.69`, 6-card 6/3 with `NB_CUT=0.5`); `STRATA_BATCH`/`STRATA_BATCH_GROUPS`/`NB_CUT`
+   still override them for experiments.
    `NB_CUT` is the expert-arena NUMA split and must track the card:island ratio (0.5 for 3:3,
    0.69 for 3:1). The launcher calls `ple_park.sh 500` (splits the 48.8 GiB PLE page cache across
    both islands) and `LD_PRELOAD=numabind.so` (arena placement) — both are documented in
@@ -109,8 +118,10 @@ one token per request.
 
 ## Geometry switching and rollback
 
-`stop` then `start` with the other `GPUS` — nothing else, the batch pair and `NB_CUT` follow the
-card count. The adopted state is fully described by: launcher exports +
+`bash ac922/scripts/lane4.sh restart` / `bash ac922/scripts/lane6.sh restart` — nothing else, the
+batch pair, `NB_CUT` and the machine layout are `lane.sh`'s job, and the boot is not accepted until
+the engine's own lines match the requested shape. The adopted state is fully described by:
+launcher exports +
 `configs/strata-nvfp4-final.json` + engine pin. Keep dated backups of the launcher before edits;
 adopt changes through the paired A/B protocol in `METHODOLOGY.md`, never by vibes.
 
