@@ -179,7 +179,17 @@ target, and why `early_stop` is now reported apart from `dropped_streams` (§see
   steady 3.7 GiB with swap off - **not** a leak, not thrash: the engine evicts parked conversations
   instead of failing, vmstat shows no swap activity, and `/health` stays 200 throughout.
 
-**The one open cost, and the cheap experiment it suggests**
+### 6b. That open cost was real, and is now closed: CC 96 -> 48 GiB (adopted)
+
+Measured, not assumed: at 245K x 6 with `gen 512` (same generation length as the original record),
+the shipped 96 GiB CC sitting at both caps (`parked=32`, `bytes=79.5 GiB`, `evictions=99`,
+`MemAvailable 10.9 GiB`) gave **wall_tg 89.3 / sum_tg 130.7**; halving CC to 48 GiB
+(`MemAvailable 49.1 GiB`) gave **wall_tg 115.1, 106.1 / sum_tg 143.5, 144.9** - **+24% deep
+aggregate**, past the 2026-11-16 figure of 100.85. The short window did not move: 8K x 6 warm
+**223.1, 224.2** (published 218.2). Gate `QUALGATE-PASS`, `det` bit-identical. Full ledger and the
+two confounders that had to be excluded first (gen length; cold-boot warm-up) in `DECISIONS.md`.
+
+**Remaining, not yet closed**
 
 CC at its 96 GiB cap means 24 stale parked conversations squat on memory that the expert page cache
 wants - and the page cache is the engine's declared prefill input (`prefill plan inputs: ...
