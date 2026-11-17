@@ -22,23 +22,26 @@
 full-window streams** — it does not drop the window.  `eval/fullwindow.py` is the tool that decides,
 and it reports byte-exact `prompt_tokens + completion == 262,144`, never "98.7% of the window".
 
-![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v3-2026-11-17.png)
+![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v4-2026-11-17.png)
 
 ## The numbers (all measured on this box)
 
 | | **4-card lane (shipped)** | 6-card lane (reference) |
 | --- | ---: | ---: |
 | Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
-| Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
-| Single-stream decode @ 8K / @ 210K | 71.7 / 71.2 tok/s | 82.1 / 81.1 tok/s |
-| Full-window concurrency | 4 × 262,136 live · agg 108.3 (23.7–30.7/stream) | 6 × 262,136 live · agg 145.6 (20.7–32.4/stream) |
-| Short-window concurrency @ 8K | agg 139.3 (34.8/stream) | agg 240.1 (39.7/stream) |
-| VRAM resident · RAM pinned | 58.6 GiB · 57.65 GiB | 85.3 GiB · 54.42 GiB |
+| Cold prefill, deepest measured point | 3,563 tok/s @ 210K (ship shape; 262K cold not re-taken) | 7,016 tok/s @ 261,494 |
+| Single-stream decode @ 8K / @ 210K | 69.9 / 66.8 tok/s | 82.1 / 81.1 tok/s |
+| Full-window concurrency | **4 × 262,136 live · agg 106.9 · 8/8 streams `finish=length`** (23.8–29.9/stream) | 6 × 262,136 live · agg 145.6 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 138.6 (34.7/stream) | agg 240.1 (39.7/stream) |
+| Warm 262K decode, single stream | 59.2 tok/s | not measured |
+| VRAM resident · RAM pinned | 58.1 GiB · 57.20 GiB | 85.3 GiB · 54.42 GiB |
 
 Rows are the adopted ship state measured 2026-11-17 (`learned expert-profile` +
-`--trim-stage-weights` + the batched pipelined ring), published as the **median of two independent
-boots per geometry** because a single deep-window run carries ±15–25% boot noise; single-run cells
-are marked `n=1` in `PERFORMANCE.md` §6d.
+`--trim-stage-weights` + the batched pipelined ring + the rebalanced `layer_split 9,24,37` with
+`--vram-reserve-mib 832`, adopted after the old shape respawned under load), published as the
+**median of two independent boots** because a single deep-window run carries ±15–25% boot noise;
+single-run cells are marked `n=1` in `PERFORMANCE.md` §6e.  The 6-card column is the reference lane,
+measured before that rebalance and still carrying its VRAM-headroom risk.
 
 Accuracy, full suites, errors = 0, budget audit clean: **GSM8K 97.12%** (1,319) · **MATH500 89.40%** (500) · **HumanEval 96.95%** (164)
 

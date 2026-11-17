@@ -13,19 +13,24 @@ actually ran; nothing is aspirational.
 | Metric | **4-card lane (shipped)** | 6-card lane (reference) |
 | --- | ---: | ---: |
 | Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
-| Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
-| Cold prefill @ 6.8K / 54K | 2,057 / 4,156 | 2,499 / 6,104 |
-| Single-stream decode @ 8K | 71.7 tok/s | 82.1 tok/s |
-| Single-stream decode @ 210K | 71.2 tok/s | 81.1 tok/s |
-| Full-window concurrency | 4 × 262,136 live, agg 108.3 tok/s (23.7–30.7/stream) | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
-| Short-window concurrency @ 8K | agg 139.3 (34.8/stream) | agg 240.1 (39.7/stream) |
-| VRAM resident | 58.6 GiB (14.5–14.9/card) | 85.3 GiB (14.0–14.8/card) |
-| Host RAM pinned | 57.65 GiB | 54.42 GiB |
+| Cold prefill @ 6.8K / 54K / 210K | 2,076 / 3,977 / 3,563 | 2,499 / 6,104 / 5,441 |
+| Cold prefill @ 262K, single stream | not re-taken on the ship shape (4,964 on the superseded one) | 7,016 tok/s (261,494 ladder) |
+| Single-stream decode @ 8K | 69.9 tok/s | 82.1 tok/s |
+| Single-stream decode @ 210K | 66.8 tok/s | 81.1 tok/s |
+| Full-window concurrency | **4 × 262,136 live, agg 106.9 tok/s, 8/8 streams `finish=length`** | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
+| Full-window concurrency, 3-way floor | 3 × 262,136 live, agg 85.7, 3/3 `finish=length` | not measured |
+| Short-window concurrency @ 8K | agg 138.6 (34.7/stream) | agg 240.1 (39.7/stream) |
+| Deep concurrency @ 245K | agg 103.5 (wall 79.6 s) | agg 135.2 (wall 93.6 s) |
+| Warm 262K decode, single stream | 59.2 tok/s | not measured |
+| VRAM resident | 58.1 GiB (14.4–14.8/card) | 85.3 GiB (14.0–14.8/card) |
+| Host RAM pinned | 57.20 GiB | 54.42 GiB |
 
 Both columns are the adopted state measured 2026-11-17 (`eval/cphase.py` arms, `aggbench`,
 `fullwindow.py`) as the **median of two independent boots per geometry** — a single deep-window run
-carries ±15–25% boot noise, so no number here comes from one boot alone unless §6d marks it `n=1`.
-Full table with calibers: `PERFORMANCE.md` §6d.
+carries ±15–25% boot noise, so no number here comes from one boot alone unless the table marks it
+`n=1`.  The 4-card column is the rebalanced ship shape (`layer_split 9,24,37`,
+`--vram-reserve-mib 832`), adopted because the previous shape respawned under its own gate fixture;
+the 6-card column predates that rebalance.  Full table with calibers: `PERFORMANCE.md` §6d–6e.
 
 **Ship invariant — 满窗是前提.**  The window is never the thing that gives: if a change cannot hold
 4 concurrent byte-exact full-window streams on the shipped 4-card lane, the ship shape drops to

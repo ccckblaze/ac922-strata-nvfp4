@@ -194,6 +194,22 @@ each entry is a *result*, not a diary.
   a note, not a gate) — recorded in `DECISIONS.md` so they are not re-added.
 - Short-window aggregate did not move with the residency tickets (4-card +4%, inside the boot band) —
   it is admission-bound, so those tickets show up in single-stream and deep-window cells instead.
+- The day ended on a defect the READMEs had hidden: the shipped lane **respawned itself** at 15:38,
+  27 minutes after a clean boot, on `mtp: round capture: out of memory` (CUDA3 down to 149 MiB free
+  while carrying 13 layers + the head + the 837 Mi MTP draft).  Nothing in our gates could see it -
+  `/health` answered 200 the whole time and `lane.sh status` actually *failed* afterwards, because
+  its boot slice spanned two engine processes.  Fixed in three moves: `lane.sh` anchors the slice on
+  the newest `engine started:` banner and reports respawns; the exit status of a successful
+  `lane.sh` boot is now 0 (a `&& reanchor` tail made it return 1 and silently killed a chained
+  measurement run); and the geometry was rebalanced to `layer_split 9,24,37` with
+  `--vram-reserve-mib 832` instead of shrinking the caches.
+- Buying headroom with reserve alone was measured and rejected: at 1024 the gate's acceptance ratio
+  fell 0.9231 → 0.747 (`FAIL acc-drift`), deep tg lost 6-11%, and cold 8K prefill lost 26%.  The
+  rebalanced split at 832 keeps the anchor hash, passes the gate twice with `acc-drift-ok 1.0`,
+  respawns in neither boot, and is the first ship shape where **every** full-window stream in both
+  boots finished `length` at prompt+gen = 262,136 (4-way agg 106.9, 3-way floor 85.7).
+- Standing lesson added below: a lane that answers `/health` is not a lane that stayed up; the
+  process start count inside one boot is now part of every geometry check.
 - Ship state re-proved after all of the above landed, on the same 4-card boot (docs merges need no
   restart): `lane4.sh status` GEOMETRY-PASS with cards 4/5 free, `/health` 200 `images: true`, and
   `eval/qualgate.sh check` giving `det` x3 = the anchor hash with `acc-drift-ok 1.003` →
@@ -239,3 +255,9 @@ each entry is a *result*, not a diary.
 9. A green-looking gate is not a gate.  Assert the fixture reached the lane (rows > 0, HTTP 200 with
    auth) before interpreting its verdict, and check liveness with a real request -- a supervisor can
    answer `/health` 200 with its engine dead, and a 401 can be graded as `FAIL det-nondeterministic`.
+10. Uptime is a measurement, not an assumption: count `engine started:` lines inside one lane boot.
+    A supervisor that respawns a dead engine restores `/health` in 90 s and leaves every gate green,
+    every hash reproducible and every number in the table taken across a crash we never saw.
+11. When a knob's fix is "give the tightest resource more room", move the workload before shrinking
+    the cache: two layers off CUDA3 bought the same headroom that reserve 1024 bought by costing
+    26% of short-window prefill and a quarter of the draft acceptance.

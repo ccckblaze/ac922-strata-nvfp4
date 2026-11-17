@@ -70,6 +70,10 @@ Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot
 - `results/charts/ac922-samelen-v3-2026-11-17.png` — the same panorama re-taken on the shipped
   4-card state, with both NVFP4 ladders measured in one protocol on 2026-11-17 (generator:
   `results/charts/plot-samelen-v3-2026-11-17.py`).
+- `results/charts/ac922-samelen-v4-2026-11-17.png` — final panorama on the rebalanced shipping
+  geometry (`layer_split 9,24,37`, `--vram-reserve-mib 832`): 4-card column re-measured over two
+  boots, full-window 8/8 `finish=length` evidence, and the self-restart defect closed (generator:
+  `results/charts/plot-samelen-v4-2026-11-17.py`).
 
 ## 4b. Window-shape family, 6 cards (2026-11-17 overnight sweep, `note312/shapes.jsonl`)
 
@@ -224,7 +228,10 @@ deep-window single runs carry +/-15-25% boot noise, so the table reads family me
 The CC 96 -> 48 prediction from the previous draft is closed in 6b; no open items remain in this
 section.
 
-### 6d. The shipped geometry is 4-card (2026-11-17, adopted config, two boots per geometry)
+### 6d. The shipped geometry is 4-card (2026-11-17, adopted config, two boots per geometry) — superseded by 6e
+
+*Kept as the delta reference.  6d is the `layer_split auto` + `--vram-reserve-mib 700` shape, which
+measured fast and then proved unstable (it respawned under load); 6e is the ship shape.*
 
 Cards 4/5 go back to the dev/iteration lane, so the ship state is the 4-card shape: `gpu [0,1,2,3]`,
 `--batch 4 --batch-groups 2` (the launcher now derives that pair and `NB_CUT=0.69` from the card
@@ -286,3 +293,61 @@ one boot only are marked `n=1`.
   `QUALGATE-PASS`.  The gate printed five `relay-cell-drift` WARNs (4/8 cells agreed): cross-boot
   relay cells carry no verdict — the same config scores 0-6/8 against its own anchor across boots —
   so they are reported and never used as a FAIL (`DECISIONS.md`, gate-discipline section).
+
+### 6e. The ship shape is rebalanced: `layer_split 9,24,37` + `--vram-reserve-mib 832` (2026-11-17)
+
+The 6d shape was not stable.  27 minutes after a clean boot the shipped lane took
+`mtp: round capture: out of memory`, exited 1 and was respawned by the serve supervisor - CUDA3 was
+down to 149 MiB free while carrying 13 layers + the head + the 837 MiB MTP draft layer.  Four
+shapes were measured on the same harnesses to fix it without paying for it in speed:
+
+| Shape | det vs anchor | gate | respawn under the gate fixture | tg 8K/54K/110K/165K/210K | full-window 4-way |
+| --- | --- | --- | --- | --- | --- |
+| `auto` + 700 (was ship, 6d) | = | PASS | **yes - the defect** | 71.7/71.6/70.1/73.3/71.2 (2 boots) | agg 108.3, one boot EOS-early 3/4 |
+| `auto` + 1024 | = | **FAIL** acc-drift 0.747 | no | 65.3/67.5/62.1/67.3/65.5 (one boot) | agg 99.4, 3/4 EOS-early |
+| **`9,24,37` + 832 (ship)** | **=** | **PASS** acc-drift-ok 1.0 | **no** | **69.9/71.5/72.0/66.0/66.8** (2 boots) | **agg 106.9, 8/8 streams `length` at 262,136** |
+| `9,24,37` + 1024 | not run | not run | not run | 65.6/61.0/66.6/66.0/66.1 (one boot) | not run |
+
+- Ship numbers (two boots, `note_c17`-style files `/data/work/rb-*.txt`, `/data/work/c2-*.txt`):
+  cold pp medians 2,075.6 / 3,977.3 / 3,964.3 / 3,817.2 / 3,562.8 tok/s at ptok
+  6,786 / 54,022 / 110,526 / 165,350 / 210,038; decode medians 69.9 / 71.5 / 72.0 / 66.0 / 66.8.
+- **Full window is the headline, and it is byte-exact twice**: `fullwindow.py run --n 4 --gen 512`
+  gave `all_prompt_exact: true`, `prompt_plus_gen = 262,136` on all four streams and
+  `finish = ["length","length","length","length"]` in *both* boots (span 23.6 / 23.0 s,
+  `sum_tg` 105.8 / 108.0).  The rebalanced shape is the first one where every concurrent stream is
+  proved to have consumed the window to its last slot, which is the ship invariant.
+- Price of the fix, stated honestly: short and mid windows are unchanged (8K -2.5%, 54K -0.2%,
+  110K +2.7%), the two deepest single-stream points read 6-10% lower than the 6d medians, and cold
+  pp at depth is ~4-5% lower.  Aggregate at the true ceiling moved 108.3 → 106.9 (-1.3%, inside the
+  boot band).  That is what buying back CUDA3 headroom costs; the alternative was a lane that
+  restarts itself under load.
+- Free VRAM at rest after a full gate run: 526/626/630/239 MiB (was 442/572/565/149).  Card 3 is
+  still the tight stage, so the respawn detector in `lane.sh` stays mandatory, and the 6-card
+  reference lane (223 MiB free on CUDA5 before this change) carries the same risk un-mitigated -
+  its rebalance is an open ticket, not a shipped fact.
+- One more reason not to buy headroom with reserve alone: at 1024 the **cold 8K prefill** falls
+  2,076 → 1,539 tok/s (`auto`) and → 1,529 (`9,24,37`), i.e. -26%, because the short-window prefill
+  buffer is squeezed by the same carve.  832 leaves it intact (2,069 / 2,082).
+
+#### 6e.1 The ship table (two boots, `/data/work/rb-*`, `/data/work/c2-*`)
+
+| Item | 4-card ship (`9,24,37` + 832) | 4-card 6d shape (superseded) |
+| --- | ---: | ---: |
+| cold pp 6.8K / 54K / 110K / 165K / 210K | 2,075.6 / 3,977.3 / 3,964.3 / 3,817.2 / 3,562.8 (n=2) | 2,056.6 / 4,156.1 / 4,174.8 / 4,031.5 / 3,706.8 |
+| tg 8K / 54K / 110K / 165K / 210K | 69.9 / 71.5 / 72.0 / 66.0 / 66.8 (n=2) | 71.7 / 71.6 / 70.1 / 73.3 / 71.2 |
+| 8K × 4 aggregate (`aggbench`) | 138.6 sum_tg, wall 131.8 (n=1) | 139.3 |
+| 245K × 4 aggregate (`aggbench`) | 103.5 sum_tg, wall 79.6 (n=1) | 100.2 |
+| full window 4 × 261,632 + 512 | **106.9** (105.8 / 108.0), span 23.0-23.6 s, **8/8 streams `finish=length` at prompt+gen 262,136** | 108.3, one boot with 3/4 streams ending early |
+| full window 3 × 261,632 + 512 | 85.7 sum_tg, 3/3 `finish=length` (n=1) | not measured |
+| warm 262K decode, single stream | 59.2 tok/s (59.1 / 59.3) | 55.9 |
+| cold 262K prefill, single stream | not re-taken (the payload was already cached by the warm probe) | 4,964 tok/s, TTFT 52.7 s |
+| VRAM / RAM | Σ 58.1 GiB used (14.5/14.4/14.4/14.8), free 504/587/597/211 MiB · pinned 57.20 GiB | Σ 58.6 GiB · 57.65 pinned |
+| gate | `QUALGATE-PASS` both boots, `acc-drift-ok 1.0`, `det` ×3 = anchor, **`boots=1`** through ~40 min of mixed load | PASS, but the lane respawned at 15:38 |
+
+- The concurrency cells are the point: aggregate did not pay for the fix at all (8K×4 139.3 → 138.6,
+  245K×4 100.2 → **103.5**, full window 108.3 → 106.9), while the deepest *single-stream* points
+  read 6-10% lower and cold pp at depth ~4-5% lower.  A lane that survives its own gate fixture and
+  proves 8/8 streams at the window edge is worth 6% at 165K single stream.
+- Card 3 still runs down to ~210 MiB free under sustained gate + full-window load.  It survived
+  (no respawn), which is the difference between a thin margin and no margin, but it is why the
+  respawn detector in `lane.sh` is mandatory and why the 6-card rebalance stays an open ticket.

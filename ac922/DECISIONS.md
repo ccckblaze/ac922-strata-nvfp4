@@ -346,13 +346,16 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   behaves differently" change.
 - **Adopted remedy: rebalance the geometry, then buy only a little headroom.** `layer_split
   9,24,37` (CUDA3 goes from 13 layers to 11; CUDA1/CUDA2 absorb the two) with
-  `--vram-reserve-mib 832`. Measured on the shipped lane, one boot:
-  `det` ×3 = the anchor hash, `QUALGATE-PASS`, `acc-drift-ok 1.0`, **no respawn** (`boots=1`) under
-  the same gate fixture that killed the old shape, and full-window 4-way came back
-  **byte-exact with all four streams finishing `length` at prompt+gen = 262,136**, span 23.6 s,
-  `sum_tg` 105.8 (per stream 23.79-29.86) against the two-boot median 108.3 — inside the boot band.
-  Ladder tg 70.5/71.8/72.1/65.5/66.9 at 8K/54K/110K/165K/210K vs medians 71.7/71.6/70.1/73.3/71.2:
-  short and mid depths unchanged, the two deepest single points read lower on one boot.
+  `--vram-reserve-mib 832`. Measured on the shipped lane over **two boots**:
+  `det` ×3 = the anchor hash and `QUALGATE-PASS` with `acc-drift-ok 1.0` in *both*, and **no respawn**
+  (`boots=1`) through ~40 min of mixed load including the very gate fixture that killed the old shape.
+  Full-window 4-way came back **byte-exact with all four streams finishing `length` at
+  prompt+gen = 262,136 in both boots** (span 23.6 / 23.0 s, `sum_tg` 105.8 / 108.0 → median 106.9
+  against the superseded shape's 108.3), and the 3-way floor is 85.7 with 3/3 `finish=length`.
+  Ladder tg medians 69.9/71.5/72.0/66.0/66.8 at 8K/54K/110K/165K/210K vs the old shape's
+  71.7/71.6/70.1/73.3/71.2 — short and mid depths unchanged, the two deepest single-stream points
+  6-10% lower; aggregate cells barely moved (8K×4 139.3 → 138.6, 245K×4 100.2 → 103.5).
+  Warm 262K single-stream decode improved 55.9 → 59.2.
 - **Why this is not a quality-for-speed trade** (the red line): no kernel, no quantization, no
   acceptance rule and no draft depth changed. Layers moved between cards, and the expert cache left
   a slightly bigger graph reserve. The greedy output hash is identical to the anchor, which is the
