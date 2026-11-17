@@ -46,7 +46,8 @@ when bit-exactness or risk justified it.
 `--spec 6 --spec-min-p 0.7` (MTP depth; acceptance 0.738–0.75 measured), `--kv int8
 --kv-resident 32768`, `--max-context 262144`, `--ple-io ram --ple-row-cache 1048576`,
 `--prompt-cache 6`, `--resident-budget-gib 64`, `--vram-reserve-mib 700`,
-`--prefill auto`, `--expert-cache auto`, `--layer-split auto`, expert-profile = repo default.
+`--prefill auto`, `--expert-cache auto`, `--layer-split auto`, expert-profile = the pack's
+learned file (adopted below), `--trim-stage-weights` (adopted below).
 
 ## Rejected (with the price we measured — do not re-litigate without new evidence)
 
@@ -214,3 +215,43 @@ same numeric path on this lane (the same asymmetry as §70.4's residency rotatio
 against a REF written warm labels a deterministic lane nondeterministic. `eval/sbench.py det` now
 issues one **ungraded warm request** before the three graded ones; the re-run passed. Anyone
 re-baselining after a boot gets the same treatment automatically.
+
+## Adopted: expert-profile = learned + `--trim-stage-weights` (C-phase, 2026-11-17)
+
+The last two residency tickets, settled with boot-level paired A/B (`eval/cphase.py`, arms
+CTL×5, learned-profile×4, trim×3, combo×2; `/data/work/note_c17`). Deep-window single-shot tg
+carries ±15-25% boot-to-boot noise, so verdicts read the family medians against the CTL envelope,
+not single runs:
+
+| target | CTL med | learned | trim | combo (adopted) |
+| --- | ---: | ---: | ---: | ---: |
+| 8K     | 57.1 | 74.9 | 73.5 | 77.9 |
+| 64K    | 64.8 | 69.2 | 75.4 | 76.5 |
+| 131K   | 58.5 | 68.2 | 79.0 | 73.8 |
+| 196K   | 61.1 | 65.8 | 81.0 | 73.5 |
+| 249K   | 69.5 | 72.4 | 79.8 | 79.4 |
+| 8K×6 per-stream | 53.9 | 55.0 | 57.6 | 58.8 |
+| 8K×6 cold-sum   | 18.5 | 18.6 | 20.6 | 20.7 |
+
+- Both tickets clear the CTL envelope everywhere except learned-profile at 196K/249K (noise).
+  The combo wins short and concurrent; trim alone keeps the 131K/196K edge (+7-10% over the combo)
+  - the combo is adopted because short-window and concurrency are the shipped objective, and the
+  combo still beats CTL everywhere.
+- `--adapt-every 0` (PT1) measured neutral against the learned profile alone: the profile's gain
+  does not require freezing adaptation. Default `--adapt-every` stays.
+- The learned profile was always a shipped-not-live artifact (`expert-profile-learned.bin`,
+  sha `592b6064...`, produced 11-14): this adopts the file that was already trained for this pack.
+- Gates: `det` × 3 bit-identical in every arm and on the adopted boot (REF held at
+  `bfd40ecd4692`); `acc-drift-ok` 0.993-1.003; teacher-forced yardstick (`qc/Q-adopt17.tsv`,
+  2,997 positions): top-1 99.07%, KL 0.0012 vs the Q2 base - the expected signature of a
+  residency ticket, same family as HC_Q8's "answers differ slightly", not a quantization change.
+- One gate false alarm worth the rule: the first trim arm's cross-boot `relay-agreement-collapse
+  0.0` FAIL was boot noise - the same default config scores 0/8..2/8 against its own REF across
+  boots (see `qualgate` history), while the adopted boot re-scored **8/8 = 1.00** against a
+  same-config REF. Cross-boot relay cells carry no verdict; same-config reproducibility does.
+- Full-window acceptance on the adopted config: 6 streams × exactly 261,632 prompt + 512 gen,
+  6/6 `prompt_exact`, 5/6 finish `length` at the window edge (262,136), one stream EOS-early at
+  473 tokens (user content, not a lane fault); `sum_tg 155.0`, span 26.3 s - up from 148.5 pre-C.
+
+Config: `ac922/configs/strata-nvfp4-final.json` (`--expert-profile .../expert-profile-learned.bin`
+rewritten to the repo copy, `--trim-stage-weights`); profile file committed under `data/`.

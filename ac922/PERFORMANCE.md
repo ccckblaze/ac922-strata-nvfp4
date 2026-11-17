@@ -189,14 +189,33 @@ aggregate**, past the 2026-11-16 figure of 100.85. The short window did not move
 **223.1, 224.2** (published 218.2). Gate `QUALGATE-PASS`, `det` bit-identical. Full ledger and the
 two confounders that had to be excluded first (gen length; cold-boot warm-up) in `DECISIONS.md`.
 
-**Remaining, not yet closed**
+### 6c. C-phase residency tickets: learned expert-profile + `--trim-stage-weights` (adopted 2026-11-17)
 
-CC at its 96 GiB cap means 24 stale parked conversations squat on memory that the expert page cache
-wants - and the page cache is the engine's declared prefill input (`prefill plan inputs: ...
-112.3 GiB available for the page cache`). Squeezing it is what makes cold prefill pay major faults.
-Since the stated rule only needs ~29 GiB of park for 6 full-window streams, sizing CC to roughly
-48 GiB (`--conversation-cache-mib 49152`) should hand ~48 GiB back to the page cache at no
-concurrency cost. Predicted effect: prefill (cold/warm-miss) faster, decode unchanged. Not yet
-measured - it needs a paired A/B at 6 x full window plus a cold-prefill arm, and it touches the
-eviction path, so it goes through the normal gates (`selfcheck` then `qualgate`, with `det`
-bitwise as the numeric anchor).
+Boot-paired arms (CTL x5, learned x4, trim x3, combo x2, `eval/cphase.py`, `/data/work/note_c17`);
+deep-window single runs carry +/-15-25% boot noise, so the table reads family medians:
+
+| regime (fresh boot) | CTL | learned | trim | **combo (adopted)** |
+| --- | ---: | ---: | ---: | ---: |
+| tg 8K | 57.1 | 74.9 | 73.5 | **77.9** |
+| tg 64K | 64.8 | 69.2 | 75.4 | **76.5** |
+| tg 131K | 58.5 | 68.2 | 79.0 | **73.8** |
+| tg 196K | 61.1 | 65.8 | 81.0 | **73.5** |
+| tg 249K | 69.5 | 72.4 | 79.8 | **79.4** |
+| 8K x 6 per-stream | 53.9 | 55.0 | 57.6 | **58.8** |
+| 8K x 6 cold-sum agg | 18.5 | 18.6 | 20.6 | **20.7** |
+
+- Full-window acceptance on the adopted boot: 6 x exactly 261,632 + 512 gen, 6/6 exact, 5/6
+  reached the window edge (262,136), one stream EOS-early at 473 tokens; **sum_tg 155.0**
+  (pre-C 148.5), span 26.3 s.
+- Quality: `det` x3 bit-identical everywhere (REF `bfd40ecd4692` held); gate on the adopted boot
+  **relay 8/8 = 1.00, acc-drift 1.0, QUALGATE-PASS**; teacher-forced yardstick over 2,997
+  positions: top-1 99.07%, KL 0.0012, PPL 4.419 vs 4.414 - the residency-ticket signature, not a
+  quantization change. Ledger and the one gate false alarm it produced: `DECISIONS.md`.
+- Trade kept honest: trim alone is the better 131K/196K decoder (+7-10% over the combo); the
+  combo was adopted because the shipped objective is short-window and concurrent first, and the
+  combo still beats the old baseline at every depth.
+- Warm single-pass on the live lane (after the gate traffic, one run): 8K **84.8**, 64K 76.0,
+  131K 77.8, 196K 82.2, 249K **82.7** pp 5,431 - direction-consistent, not a new anchor.
+
+The CC 96 -> 48 prediction from the previous draft is closed in 6b; no open items remain in this
+section.
