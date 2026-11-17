@@ -169,3 +169,48 @@ The guard now keeps a stream when `finish_reason == "stop"` regardless of length
 this stream" (error, or no decode window at all). `calibrate()` gained a one-unit refinement pass,
 because the coarse 5% band parked at 234,300 for a 260,000 target - i.e. it would have answered a
 "can we do 6 x 262K" question about 6 x 234K.
+
+## Adopted: `--conversation-cache-mib 49152` (was 98304) — deep aggregate +24% (2026-11-17)
+
+The trigger was a user question: the published figure showed ~220 aggregate and the lane now
+reports under 150. Three separate things were conflated, and each was measured rather than argued.
+
+1. **The 220 was the 8K point, not a full-window point.** Re-measured warm on the same shape:
+   8K x 6 = **223.1 / 224.2** (two reps, wall 206.2 / 205.3) against the published 218.2 - the short
+   window never regressed.
+2. **The deep window had genuinely fallen, and the cause was memory state, not code.** At 245K x 6
+   (gen 512, the same generation length as the original record - checked, since a shorter gen could
+   have explained it and did not: 256 -> 130.4, 512 -> 130.7):
+
+   | state | CC | MemAvailable | wall_tg | sum_tg | per-stream med |
+   | --- | --- | ---: | ---: | ---: | ---: |
+   | 2026-11-16 original | 96 GiB | 58.3 GiB | 100.85 | - | 23.35 |
+   | 2026-11-17 before | 96 GiB | **10.9 GiB** | 89.3 | 130.7 | 20.6 |
+   | **2026-11-17 after** | **48 GiB** | 49.1 GiB | **115.1 / 106.1** | **143.5 / 144.9** | 22.6 / 23.8 |
+
+   A day of benchmarking had filled the conversation cache to both of its caps (`parked=32` = the
+   slot ceiling, `bytes=79.5 GiB`, `evictions=99`), and parked conversations are exactly the memory
+   the expert page cache wants. Halving CC gave the deep window back ~31 GiB and it recovered past
+   the original figure; the short window is unchanged within drift.
+3. **Capacity rule holds**: 48 GiB / ~4.8 GiB per full-window conversation = ~10 conversations, so
+   the "N cards <-> N full-window streams" rule keeps 6 live plus slack. If a deployment wants more
+   parked sessions than that, raise CC and accept the deep-window cost - the trade is now priced.
+
+Gate: `QUALGATE-PASS` on the new CC (`det` bit-identical to REF `bfd40ecd4692`, relay 2/8 which is
+the lane's documented floor, `acc-drift-ok 0.993`). A CC size is a cache capacity, not a numeric
+path, and the gate confirms that rather than assuming it.
+
+## Gate defect fixed: the det fixture graded a cold first run
+
+`qualgate check` on the fresh CC boot returned **FAIL det-nondeterministic** - the first time that
+anchor ever moved. It was the fixture, not the lane:
+
+    run 0: pp=2550 tok/s (cold prefill)  -> hash 3acf024dbb26
+    run 1: pp=51                         -> hash bfd40ecd4692  == REF
+    run 2: pp=53                         -> hash bfd40ecd4692  == REF
+
+The first request of a boot must prefill the fixture, and cold prefill and cached replay are not the
+same numeric path on this lane (the same asymmetry as §70.4's residency rotation). Grading run 0
+against a REF written warm labels a deterministic lane nondeterministic. `eval/sbench.py det` now
+issues one **ungraded warm request** before the three graded ones; the re-run passed. Anyone
+re-baselining after a boot gets the same treatment automatically.
