@@ -366,6 +366,34 @@ the window edge**, not 8/8 rows.  Verified on the live lane at 23:15 with `--n 1
 ttft 1.11 s (the restore path answering a 261,632-token prompt), and the boot count stayed at 419, so
 the probe cost the lane nothing.
 
+### H.3 — the panorama's last fillable cells, and one new caliber rule (11-17 23:2x-23:5x)
+
+`results/charts/plot-samelen-v5-2026-11-17.py` -> `results/charts/ac922-samelen-v5-2026-11-17.png`.  Three
+of v4's blanks were fillable without touching a card, one needed a live probe:
+
+- **65K single-stream decode on 4 cards** (`depthtg.py`, shipping binary boot): `ptok=65376`, two
+  independent runs of 5 rounds, `tg_med` **75.4** and **70.8** - a **6.1% run-to-run drift** on the same
+  lane, same prompt, same flags.  Recorded as the 10-round median **72.1**, not as either shot.  The
+  6-card cell (80.3) is a *single* reuse reading from `note_c17/6CARD2.p65k`, so the 11% gap between
+  them is a median against a single shot and is labelled as such on the chart rather than claimed.
+- **Monster 8K x 4 aggregate**: 122.0 (4 cards) and 83.1 (6 cards) - already in runbook section 74.5,
+  never plotted.  Both stacks' 6-card-vs-4-card concurrency reversal is now visible in panel 3.
+- **Monster 6-card resource bill**: Sigma 66.8 GiB with the node8-island range 11.6-13.6 GiB/card is in
+  the archive; per-card same-moment sampling and host RAM are not, so the bar renders as a total with
+  the missing evidence named instead of a grey "not sampled" placeholder.
+- **Resource bill refreshed to the shipping boot**: `resident RAM 57.10 GiB` (84 identical self-reports
+  in one boot), VRAM 14.48/14.38/14.38/14.77 GiB, free 528/633/626/237 MiB with card 3 tightest.
+
+**Deep-window decode is not round-to-round reproducible on this lane, and the short window is.**  At
+65K the five rounds of one run produced 2-3 distinct reply digests: rounds 2-5 agreed, round 1 did
+not, and a second run produced three.  The 10K `det` fixture stayed at `bfd40ecd4692` across three
+runs in the same boot.  The mechanism is visible in the engine's own line: a 65K replay is
+`65371 reused + 5 read`, so what varies is not the cached prefix but the *tail* prefill, whose chunk
+geometry depends on which slots are live when the request lands - a 332-token probe from another
+client sat between my rounds.  This is the same family as the cold/cached asymmetry that ticket T1
+(`--prefill-pipe` x `STRATA_SPLIT_PF_RES`) is meant to close.  Consequence for every table we publish:
+deep-window numbers are **rate** evidence only; determinism claims stay anchored to the 10K fixture.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -425,3 +453,8 @@ the probe cost the lane nothing.
     the byte-exact window edge, where a genuinely full window guarantees `ctok < gen`; the invariant
     was fine and the assertion was decoration.  Assert the thing you mean (the window closed on the
     stream), not the first observable that looked like it.
+16. Never compare a single shot to a median.  The 6-card 65K decode reading (80.3, one shot) and the
+    4-card 65K reading (72.1, median of 10 rounds over two runs) differ by 11%, but the same 4-card
+    protocol drifted 6.1% between its own two runs - so half of that "gap" is confidence, not speed.
+    State the round count next to every deep-window number, or the chart silently ranks noise.
+

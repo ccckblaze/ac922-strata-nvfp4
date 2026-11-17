@@ -48,18 +48,24 @@ Over-subscription behavior (8 × 245K on 6 cards): fail 0, no OOM, peak live pin
 
 | Metric | N1 NVFP4 6c | N1 NVFP4 4c | S1 int8 4c | M1 Monster 4c | M1 Monster 6c |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Cold pp @ ~7K | 2,246 | 1,488 | 2,955 | 1,897 | 1,790 |
-| Cold pp @ ~54K | 5,154 | 3,970 | 5,785 | 1,905 | 2,159 |
+| Cold pp @ ~7K | 2,498.8 | 2,075.6 | 2,955 | 1,897 | 1,790 |
+| Cold pp @ ~54K | 6,104.3 | 3,977.3 | 5,785 | 1,905 | 2,159 |
 | Cold pp @ full window | **7,016** | **5,120** | — (reach 210K: 5,041) | — (reach 89K) | 2,121 @ 260K |
-| tg @ 8K | 66.0 | 57.2 | 63.3 | 89.3–102.2 (bench3 caliber +14%) | 85.9 |
-| tg @ full window | 72.5 | 57.1 | — | — | 39.2 |
-| Agg decode (best measured) | 218.2 (8K×6) | 133.6 (8K×4) | 235.0 (50K×4) | 119.7 (1.5K×4) | 115.3 (1.5K×4) |
-| VRAM | 87.7 GiB | 58.6 GiB | 13.4–14.9/card | 53.0 | 66.8 |
-| RAM | 47.7 pinned | 47.7 pinned | ~40 experts | ~62 used | — |
+| tg @ 8K | 82.1 | 69.9 | 63.3 | 89.3–102.2 (bench3 caliber +14%) | 85.9 |
+| tg @ ~65K | 80.3 (one shot) | **72.1** (median of 10 rounds; runs 75.4 / 70.8) | — (caliber, see below) | 75.5 | 79.0 |
+| tg @ full window | 72.5 | 57.1 (warm, single stream) | — | — | 39.2 |
+| Agg decode (best measured) | 240.1 (8K×6) | 138.6 (8K×4) | 235.0 (50K×4) | 122.0 (8K×4) | 115.3 (1.5K×4) |
+| Agg @ byte-exact full window | **145.6** (6 × 262,136) | **109.3** (4 × 262,136, shipping-binary boot) | — | — | — |
+| VRAM | 85.3 GiB | 58.0 GiB | 13.4–14.9/card | 50.5 | 66.8 (per-card not sampled) |
+| RAM | 54.42 pinned | 57.10 pinned | ~40 experts | ~61 used | not sampled same-moment |
 
 Caliber warnings (also printed on the chart): S1 deep-window tg (110–112) is inflated by the
 synthetic repeated-corpus ladder + ngram drafting and is excluded from same-length slices;
-Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot ladders only.
+Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot ladders only;
+the 65K pair is a single shot (6c) against a 10-round median (4c) and the same 4-card protocol
+drifted 6.1% run to run, so the 11% gap is partly confidence, not speed.  Deep-window rounds are not
+reproducible round to round at 65K (2-3 distinct digests per five rounds, tail-prefill chunk geometry
+dependent); determinism is claimed only against the 10K `det` fixture.
 
 ## 4. Charts
 
@@ -70,6 +76,10 @@ Monster 8K tg differs ~14% between bench3 and ladder calibers — read same-boot
 - `results/charts/ac922-samelen-v3-2026-11-17.png` — the same panorama re-taken on the shipped
   4-card state, with both NVFP4 ladders measured in one protocol on 2026-11-17 (generator:
   `results/charts/plot-samelen-v3-2026-11-17.py`).
+- `results/charts/ac922-samelen-v5-2026-11-17.png` — v4 plus the last fillable cells: 65K on both
+  hero rows, Monster 8K×4 aggregates on both card counts, Monster 6-card bill as a named-total
+  instead of a placeholder, resource bill refreshed to the shipping-binary boot, and the full-window
+  invariant relabelled `held_edge` (generator: `results/charts/plot-samelen-v5-2026-11-17.py`).
 - `results/charts/ac922-samelen-v4-2026-11-17.png` — final panorama on the rebalanced shipping
   geometry (`layer_split 9,24,37`, `--vram-reserve-mib 832`): 4-card column re-measured over two
   boots, full-window 8/8 `finish=length` evidence, and the self-restart defect closed (generator:

@@ -17,13 +17,13 @@ actually ran; nothing is aspirational.
 | Cold prefill @ 262K, single stream | not re-taken on the ship shape (4,964 on the superseded one) | 7,016 tok/s (261,494 ladder) |
 | Single-stream decode @ 8K | 69.9 tok/s | 82.1 tok/s |
 | Single-stream decode @ 210K | 66.8 tok/s | 81.1 tok/s |
-| Full-window concurrency | **4 × 262,136 live, agg 106.9 tok/s, 8/8 streams `finish=length`** | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
+| Full-window concurrency | **4 × 262,136 live, agg 109.3 tok/s, `held_edge` 4/4** (pre-switch boots: 105.8 / 108.0) | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
 | Full-window concurrency, 3-way floor | 3 × 262,136 live, agg 85.7, 3/3 `finish=length` | not measured |
 | Short-window concurrency @ 8K | agg 138.6 (34.7/stream) | agg 240.1 (39.7/stream) |
 | Deep concurrency @ 245K | agg 103.5 (wall 79.6 s) | agg 135.2 (wall 93.6 s) |
 | Warm 262K decode, single stream | 59.2 tok/s | not measured |
-| VRAM resident | 58.1 GiB (14.4–14.8/card) | 85.3 GiB (14.0–14.8/card) |
-| Host RAM pinned | 57.20 GiB | 54.42 GiB |
+| VRAM resident | 58.0 GiB (14.4–14.8/card) | 85.3 GiB (14.0–14.8/card) |
+| Host RAM pinned | 57.10 GiB | 54.42 GiB |
 
 Both columns are the adopted state measured 2026-11-17 (`eval/cphase.py` arms, `aggbench`,
 `fullwindow.py`) as the **median of two independent boots per geometry** — a single deep-window run
