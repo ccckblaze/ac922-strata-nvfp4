@@ -22,7 +22,8 @@ folder (an override kept for two releases, then removed).
   what MMQ and the split engine compile: `common.cuh`, `mma.cuh`, `mmq*.cuh`, `quantize.cu/.cuh`, `vecdotq.cuh`, `vendors/{cuda,hip}.h` and the
   MMQ instances for the formats Strata ships (Q2_0, IQ2_XXS/XS/S, IQ3_XXS/S, IQ4_NL/XS, Q8_0, Q5_0, Q4_K, Q5_K, Q5_1, Q6_K).
 - **Not here:** every other backend (CUDA's other kernels, HIP, Metal, SYCL, Vulkan, ...), the backend registry (`ggml-backend-reg.cpp`), other CPU
-  architectures (PowerPC, s390x, RISC-V, LoongArch, Wasm), KleidiAI, llamafile, the CPU feature probe for dynamic backends, tests, examples.
+  architectures (s390x, RISC-V, LoongArch, Wasm), KleidiAI, llamafile, the CPU feature probe for dynamic backends, tests, examples. PowerPC is here
+  as an AC922 shim, not upstream's kernel: see edit 4.
   Options for them (`GGML_CPU_KLEIDIAI`, `GGML_LLAMAFILE`, `GGML_BACKEND_DL`, `GGML_CPU_ALL_VARIANTS`) are not supported by this tree.
 - **llama.cpp itself** (the picture reader's mtmd, gguf-py for the pack tools) is not here: `strata-vision` and setup still use a llama.cpp
   checkout. Those are the next phase.
@@ -61,6 +62,15 @@ folder (an override kept for two releases, then removed).
    package using the new name) is a packaging change and goes with phase 1B. `ggml/src/ggml-common.h` of this tree stays llama.cpp's own. SYCL keeps its own
    SYCL-mode copy, `sycl/third_party/ggml/ggml-common.h`.
 
+4. **ppc64le builds (AC922, POWER9).** `ggml-cpu.c` references the non-generic `ggml_vec_dot_*` symbols whenever the CPU backend compiles for
+   PowerPC, and `ggml/src/ggml-cpu/CMakeLists.txt` lists `arch/powerpc/quants.c` in that branch unconditionally - so without that file a fresh
+   `cmake` on ppc64le stops with "Cannot find source file". Upstream's POWER9 kernel is not vendored (this tree ships x86 and Arm only). Instead
+   `arch/powerpc/quants.c` is AC922's own `added` file: it forwards every symbol to the reference `*_generic` implementation, which is what this
+   box runs anyway (the CPU lane is the expert pool and the quantizers; the MoE experts are on the GPU through `native_experts`, and the decode
+   numbers never touch this path). It compiles as plain C, so the same edit adds `-U__POWER9_VECTOR__` to the PowerPC `ARCH_FLAGS`: with
+   `-mcpu=power9` the compiler predefines `__POWER9_VECTOR__`, which pulls the AltiVec/POWER9 paths of the headers into a file that is deliberately
+   scalar. `tools/check_vendored.py` treats both rows as `added` / `edited`; the ppc64le build of the engine is what proves the shim links.
+
 ## Updating
 
 There is no routine update: the pin is the commit the packs, the oracle tests and the release builds were verified against. A move to a newer
@@ -89,7 +99,7 @@ upstream 683e0583268e91e1f50b4ffc416b6523e0cec2dfdb3984c89792bda29e32566b 683e05
 upstream 890f527a231068c1a3f6cad4515dbeba36d4d32889f12f20fc35af7bf97c3216 890f527a231068c1a3f6cad4515dbeba36d4d32889f12f20fc35af7bf97c3216 ggml/src/ggml-backend-meta.cpp
 upstream 2dd6a572f087a1fddaa52dbf2378b777cd21752f4b2a1292c8da3bcb05fbcfd9 2dd6a572f087a1fddaa52dbf2378b777cd21752f4b2a1292c8da3bcb05fbcfd9 ggml/src/ggml-backend.cpp
 upstream 0061131b615c5721fc88a78feeb22c1f8c450f1c2646a317d80796a653bf595c 0061131b615c5721fc88a78feeb22c1f8c450f1c2646a317d80796a653bf595c ggml/src/ggml-common.h
-upstream ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ggml/src/ggml-cpu/CMakeLists.txt
+edited 00824bee0cc32560b22410c3a2701f2e971588d662db4aab329c4f96552e1cc0 ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ggml/src/ggml-cpu/CMakeLists.txt
 upstream 636d1e4b858a86ad6568100bbdb4bf9715d9dfb25d3831415d55e04e39acad86 636d1e4b858a86ad6568100bbdb4bf9715d9dfb25d3831415d55e04e39acad86 ggml/src/ggml-cpu/amx/amx.cpp
 upstream 9d098ceee6a8114d4a660ff269064a27aa25b8a4f205d1e6984d17bec5104f0d 9d098ceee6a8114d4a660ff269064a27aa25b8a4f205d1e6984d17bec5104f0d ggml/src/ggml-cpu/amx/amx.h
 upstream c694f6bb066a820b717f986914b0d112dca0d8d3a1e239e958fce30c864751c3 c694f6bb066a820b717f986914b0d112dca0d8d3a1e239e958fce30c864751c3 ggml/src/ggml-cpu/amx/common.h
@@ -98,6 +108,7 @@ upstream bd33d0713b12daf9eedea1619dd715619baaa36b98c44ec754d532909d80933a bd33d0
 upstream 3cb8b95338a7a059e559389637e11e158ee417895e8c409cab27909863792c9f 3cb8b95338a7a059e559389637e11e158ee417895e8c409cab27909863792c9f ggml/src/ggml-cpu/arch-fallback.h
 upstream 9fccd3897db24c9df89b8431b588175894e5f54697cf45768d0c6e6c5544093e 9fccd3897db24c9df89b8431b588175894e5f54697cf45768d0c6e6c5544093e ggml/src/ggml-cpu/arch/arm/quants.c
 upstream 2e7ba6aaf10834601315fc8f5e7f52a1638076bf6c0435542247c3de1ee4cce7 2e7ba6aaf10834601315fc8f5e7f52a1638076bf6c0435542247c3de1ee4cce7 ggml/src/ggml-cpu/arch/arm/repack.cpp
+added 1fea7859473390f64e0921cc7a274978510022c5a5251dc68c932dec2f9dbc86 - ggml/src/ggml-cpu/arch/powerpc/quants.c
 upstream 3c489fdc77e3ab484a5f188bff9c60c0e9483c951ed65c1a562a04c249d5628e 3c489fdc77e3ab484a5f188bff9c60c0e9483c951ed65c1a562a04c249d5628e ggml/src/ggml-cpu/arch/x86/quants.c
 upstream c69735f83caf854172cac78eed2cbc022ef81c077e5f6aca55a49d3404a02331 c69735f83caf854172cac78eed2cbc022ef81c077e5f6aca55a49d3404a02331 ggml/src/ggml-cpu/arch/x86/repack.cpp
 upstream 2df261aadce36a20f5e3bf6961d4ca27b8c2d461afc41488361ee6ad09c1730d 2df261aadce36a20f5e3bf6961d4ca27b8c2d461afc41488361ee6ad09c1730d ggml/src/ggml-cpu/binary-ops.cpp

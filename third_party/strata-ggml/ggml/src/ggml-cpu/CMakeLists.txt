@@ -400,6 +400,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             else()
                 list(APPEND ARCH_FLAGS -mcpu=native -mtune=native -mpowerpc64)
             endif()
+            list(APPEND ARCH_FLAGS -U__POWER9_VECTOR__)
         elseif(GGML_CPU_ALL_VARIANTS)
             # Begin with the lowest baseline
             set(ARCH_DEFINITIONS "")
