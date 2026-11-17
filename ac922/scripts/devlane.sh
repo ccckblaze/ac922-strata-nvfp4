@@ -148,6 +148,52 @@ setflag("--spec-min-p",os.environ["DEV_SPEC_MIN_P"]) if os.environ.get("DEV_SPEC
 def delflag(name):
     while name in c["args"]:
         i=c["args"].index(name); del c["args"][i:i+2]
+# The geometry must match the dev card count: serve reads the config's "layer_split" key while the
+# engine gets --layer-split in args, and both must describe len(glist) cards. The base config is
+# written for the shipping lane (4 or 6 cards), so when its shape does not fit, recompute an even
+# split from the native gguf's block_count. DEV_LAYER_SPLIT overrides; "off" drops the split.
+def gguf_block_count(path):
+    import struct
+    fmts={0:("<B",1),1:("<b",1),2:("<H",2),3:("<h",2),4:("<I",4),5:("<i",4),6:("<f",4),7:("<?",1),
+          10:("<Q",8),11:("<q",8),12:("<d",8)}
+    def rd(f,fmt): return struct.unpack(fmt,f.read(struct.calcsize(fmt)))[0]
+    def rstr(f):
+        l=rd(f,"<Q"); return f.read(l)
+    try:
+        with open(path,"rb") as f:
+            if f.read(4)!=b"GGUF": return None
+            rd(f,"<I"); rd(f,"<Q"); nkv=rd(f,"<Q")
+            for _ in range(nkv):
+                k=rstr(f).decode("utf-8","replace"); t=rd(f,"<I")
+                if t in fmts: v=rd(f,fmts[t][0])
+                elif t==8: rstr(f); v=None
+                elif t==9:
+                    et=rd(f,"<I"); cnt=rd(f,"<Q")
+                    if et in fmts: f.read(cnt*fmts[et][1])
+                    elif et==8:
+                        for _ in range(cnt): rstr(f)
+                    else: return None
+                    v=None
+                else: return None
+                if k.endswith("block_count") and isinstance(v,int): return v
+    except OSError:
+        return None
+    return None
+n=len(glist)
+cur=str(c.get("layer_split","auto"))
+vals=[int(x) for x in cur.split(",")] if cur and cur!="auto" else []
+split=os.environ.get("DEV_LAYER_SPLIT")
+if not split and len(vals)!=n-1:
+    if n==1:
+        split="off"
+    else:
+        a=c["args"]; L=gguf_block_count(a[a.index("--native")+1]) if "--native" in a else None
+        if L: split=",".join(str(L*i//n) for i in range(1,n))
+        else: sys.exit('devlane: config layer_split %r does not fit %d cards and the layer count is unreadable; set DEV_LAYER_SPLIT' % (cur,n))
+if split=="off":
+    c["layer_split"]="auto"; delflag("--layer-split")
+elif split:
+    c["layer_split"]=split; setflag("--layer-split",split)
 # The window shape is chosen first so DEV_FLAGS keeps the last word. It used to be forced after the
 # DEV_FLAGS loop, which made every shape arm unreachable from the environment: --pipeline-windows
 # needs the engine to admit one request at a time, and the forced --batch blocked exactly that.
@@ -204,5 +250,5 @@ status(){
 }
 case "${1:-}" in
   start) start;; stop) stop;; restart) stop; sleep 2; start;; status) status;; check) check;;
-  *) echo "usage: $0 {start|stop|restart|status|check}   (env: DEV_GPUS DEV_PORT DEV_MAX_CONTEXT DEV_CC_MIB DEV_RESIDENT_GIB DEV_VISION DEV_NUMA FORCE)";;
+  *) echo "usage: $0 {start|stop|restart|status|check}   (env: DEV_GPUS DEV_PORT DEV_MAX_CONTEXT DEV_CC_MIB DEV_RESIDENT_GIB DEV_VISION DEV_NUMA DEV_LAYER_SPLIT FORCE)";;
 esac
