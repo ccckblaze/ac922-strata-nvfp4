@@ -325,3 +325,44 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   it is not a gate defect - expert pages are still read remotely the first time. Closing it needs a
   full-pack first-touch (or per-role sizes in the pack), which is the pending remote-read ticket,
   not a lane.sh problem.
+
+## Fixed: the shipped lane was dying in production — `mtp: round capture: out of memory` (2026-11-17)
+
+- **Symptom.** 27 minutes after a clean `lane4.sh start`, with `/health` answering normally, the
+  engine took `mtp: round capture: out of memory` on an ordinary ~8.5K-token/32-token request,
+  exited 1, and the serve supervisor started it again. Two things that looked fine were not: the
+  in-flight request got `HTTP 400`, and `lane.sh status` afterwards printed `GEOMETRY-FAIL` because
+  the boot slice (one recorded byte offset) then spanned **two engine processes** and counted the
+  NUMA pool line twice. A respawn is invisible to every gate we had.
+- **Margin evidence.** Before the fix, free VRAM per card was 442/572/565/**149 MiB** and the engine
+  had already written its own diagnosis: `verify: no VRAM for a new window graph: freed the graphs
+  of 1 older batch slot layouts, 2 kept (a larger --vram-reserve-mib keeps more)`. CUDA3 is the
+  tight stage because it carries 13 layers **plus** the head **plus** the 837 MiB MTP draft layer.
+- **First remedy (reserve 700 → 1024) bought stability and paid with speed.** No respawn under the
+  same gate workload (`boots=1`), `det` still the anchor hash, but the expert/draft caches shrank:
+  MTP acceptance in the gate fell 0.9231 → 0.747 (`FAIL acc-drift`), the deep ladder lost 6-11% tg,
+  and full-window 4-way aggregate fell 108.5 → 99.4. Rejected as a ship shape: the acceptance
+  sentinel exists precisely to catch this kind of "the numeric path is the same but the machine
+  behaves differently" change.
+- **Adopted remedy: rebalance the geometry, then buy only a little headroom.** `layer_split
+  9,24,37` (CUDA3 goes from 13 layers to 11; CUDA1/CUDA2 absorb the two) with
+  `--vram-reserve-mib 832`. Measured on the shipped lane, one boot:
+  `det` ×3 = the anchor hash, `QUALGATE-PASS`, `acc-drift-ok 1.0`, **no respawn** (`boots=1`) under
+  the same gate fixture that killed the old shape, and full-window 4-way came back
+  **byte-exact with all four streams finishing `length` at prompt+gen = 262,136**, span 23.6 s,
+  `sum_tg` 105.8 (per stream 23.79-29.86) against the two-boot median 108.3 — inside the boot band.
+  Ladder tg 70.5/71.8/72.1/65.5/66.9 at 8K/54K/110K/165K/210K vs medians 71.7/71.6/70.1/73.3/71.2:
+  short and mid depths unchanged, the two deepest single points read lower on one boot.
+- **Why this is not a quality-for-speed trade** (the red line): no kernel, no quantization, no
+  acceptance rule and no draft depth changed. Layers moved between cards, and the expert cache left
+  a slightly bigger graph reserve. The greedy output hash is identical to the anchor, which is the
+  strongest statement this machine can make about the numeric path.
+- **Ship invariant, stated as a rule (user, 2026-11-17): 满窗是前提.** The shipped 4-card lane must
+  serve concurrent streams at the byte-exact full window (262,136). If 4-way cannot be held, the
+  ship shape drops to **3-way full window**; the window itself never drops. `eval/fullwindow.py` is
+  the arbiter and reports `prompt_tokens + completion == 262,144` exactly — "98.7% of the window"
+  is not a pass, and neither is a run where streams end early on their own.
+- **Gate defect fixed with it:** `lane.sh` now anchors the boot slice on the newest per-process
+  `engine started:` banner instead of trusting the recorded offset, and reports
+  `WARN the engine has restarted N times inside this lane boot` with the logged cause. Without this,
+  a respawned lane passes as healthy.

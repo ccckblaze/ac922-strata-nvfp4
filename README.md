@@ -3,16 +3,24 @@
 **Deliverable index:** [English](ac922/README.md) · [中文成果总览](ac922/README.zh-CN.md)
 
 > **EN —** We made a 125B hybrid-MoE flagship behave like a modern-GPU inference server on a
-> POWER9 box with six Volta cards: the **full 262,144-token context is live**, cold prefill crosses
-> **7,000 tok/s**, **six concurrent full-window streams decode together**, and accuracy lands at
-> **GSM8K 97.12 / MATH500 89.40 / HumanEval 96.95**. Every number is measured on this machine, every
-> knob carries an adopted-or-rejected ledger entry, and the engine is exactly upstream `b08a70078` —
-> clone, `cmake`, run, and you have the server we benchmarked.
+> POWER9 box with Volta cards from 2017: the **full 262,144-token context is live and it is the
+> ship invariant** — the shipped 4-card lane serves **4 concurrent streams at the byte-exact full
+> window** (6 concurrent on the 6-card reference), cold prefill crosses **7,000 tok/s** there and
+> **4,964 tok/s** here, and accuracy lands at **GSM8K 97.12 / MATH500 89.40 / HumanEval 96.95**.
+> Every number is measured on this machine, every knob carries an adopted-or-rejected ledger entry,
+> and the engine is exactly upstream `b08a70078` — clone, `cmake`, run, and you have the server we
+> benchmarked.
 >
-> **中文 —** 我们把 125B 混合 MoE 旗舰，在 POWER9 + 六张 V100 的老服务器上跑出了"当代推理服务器"的形态：
-> 262,144 满窗上下文真实可用、冷 prefill 破 7,000 tok/s、6 路满窗并发同时解码，精度 GSM8K 97.12 /
+> **中文 —** 我们把 125B 混合 MoE 旗舰，在 POWER9 + 2017 年的 V100 老服务器上跑出了"当代推理服务器"的形态：
+> **满窗是前提、也是出厂不变量**——262,144 满窗真实可用，出厂 4 卡线**同时服务 4 路逐字节满窗**
+> （6 卡参照线 6 路），冷 prefill 在 6 卡破 7,000 tok/s、4 卡 4,964 tok/s，精度 GSM8K 97.12 /
 > MATH500 89.40 / HumanEval 96.95。每个数字都有实测出处，每个开关都有采纳或否决的账；克隆本仓库即可编译、
 > 复现我们跑分的那台引擎。
+
+**Ship invariant (满窗优先):** the window never gives way to concurrency.  If a change cannot hold
+4 concurrent full-window streams on the shipped 4-card lane, the ship shape drops to **3 concurrent
+full-window streams** — it does not drop the window.  `eval/fullwindow.py` is the tool that decides,
+and it reports byte-exact `prompt_tokens + completion == 262,144`, never "98.7% of the window".
 
 ![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v3-2026-11-17.png)
 

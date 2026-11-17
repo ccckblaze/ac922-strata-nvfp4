@@ -27,6 +27,12 @@ Both columns are the adopted state measured 2026-11-17 (`eval/cphase.py` arms, `
 carries ±15–25% boot noise, so no number here comes from one boot alone unless §6d marks it `n=1`.
 Full table with calibers: `PERFORMANCE.md` §6d.
 
+**Ship invariant — 满窗是前提.**  The window is never the thing that gives: if a change cannot hold
+4 concurrent byte-exact full-window streams on the shipped 4-card lane, the ship shape drops to
+**3 concurrent full-window streams**, not to a shorter window.  `eval/fullwindow.py` is the arbiter
+(`prompt_tokens + completion == 262,144` byte-exact; "98.7% of the window" is not a pass), and
+`eval/aggbench.py` prices what the concurrency actually costs.
+
 Accuracy (full suites, errors = 0, budget audit clean): **GSM8K 97.12%** (1,319),
 **MATH500 89.40%** (500), **HumanEval 96.95%** (164). See `ACCURACY.md`.
 

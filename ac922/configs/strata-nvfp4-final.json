@@ -44,7 +44,7 @@
   "--resident-budget-gib",
   "64",
   "--vram-reserve-mib",
-  "1024",
+  "832",
   "--aux-cpus",
   "auto",
   "--batch",
@@ -59,7 +59,7 @@
   2,
   3
  ],
- "layer_split": "auto",
+ "layer_split": "9,24,37",
  "tokenizer": "/data/work/Strata-data/models/nvfp4-gptq/pack/tokenizer",
  "model_name": "qwen3.8-flash-next-gptq-nvfp4",
  "log": "/data/champion/strata-nvfp4-engine.log",
