@@ -279,3 +279,10 @@ one boot only are marked `n=1`.
 - Remaining thin cells (`n=1`): the 65K single-stream points on both geometries, both `aggbench`
   245K cells, the 6-card 8K×6 aggregate, and the cold/warm 262K single-stream pair (4-card only).
   They are marked in the table; closing them is a repeat of the same harness, not new methodology.
+- Ship-state re-proof after the lane scripts landed (15:45, same 4-card boot, nothing restarted for
+  the docs merge): `lane4.sh status` → `GEOMETRY-PASS 4 cards (0,1,2,3), 2 groups of 2, shim
+  loaded` with cards 4/5 at 225/13 MiB, `/health` 200 with `images: true`, and
+  `eval/qualgate.sh check` → `det` x3 `bfd40ecd4692` equal to `REF.json`, `acc-drift-ok 1.003`,
+  `QUALGATE-PASS`.  The gate printed five `relay-cell-drift` WARNs (4/8 cells agreed): cross-boot
+  relay cells carry no verdict — the same config scores 0-6/8 against its own anchor across boots —
+  so they are reported and never used as a FAIL (`DECISIONS.md`, gate-discipline section).

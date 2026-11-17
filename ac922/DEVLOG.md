@@ -194,6 +194,14 @@ each entry is a *result*, not a diary.
   a note, not a gate) — recorded in `DECISIONS.md` so they are not re-added.
 - Short-window aggregate did not move with the residency tickets (4-card +4%, inside the boot band) —
   it is admission-bound, so those tickets show up in single-stream and deep-window cells instead.
+- Ship state re-proved after all of the above landed, on the same 4-card boot (docs merges need no
+  restart): `lane4.sh status` GEOMETRY-PASS with cards 4/5 free, `/health` 200 `images: true`, and
+  `eval/qualgate.sh check` giving `det` x3 = the anchor hash with `acc-drift-ok 1.003` →
+  `QUALGATE-PASS`.  One caution recorded here rather than buried: the gate's `relay-cell-agreement`
+  printed 4/8 with five drift WARNs, and a bare `sbench det` invocation returned HTTP 400 once before
+  the same command reproduced the anchor hash four times in a row.  Neither changes a verdict -
+  cross-boot relay cells carry no verdict by design, and a fixture that aborts is not a measurement -
+  but a lane is only "ship" when the *graded* gate says so, not when one probe looks odd.
 
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
