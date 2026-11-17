@@ -35,7 +35,7 @@ the axis").
 
 | Stack | Max live ptok | Note |
 | --- | ---: | --- |
-| NVFP4 6-card / 4-card | **261,494** | model hard cap 262,144; engine keeps ~24-30K per slot, net usable ≈ 232K for prompt+generation headroom |
+| NVFP4 6-card / 4-card | **262,134** | model cap 262,144; the engine's real reserve is **8 tokens**, not tens of thousands - prompt 262,134 is accepted and 262,136 is refused, and six concurrent streams were held at position 262,136 (§6a). The older "net usable ≈ 232K / engine keeps 24-30K per slot" note was wrong and is withdrawn; 261,494 had already been measured live. |
 | Strata int8 (IQ3_XXS, 0.1.41, 4-card) | 210,038 stable | `-c 262144` builds; 210K is the measured stable depth |
 | Monster (llama.cpp fork, 6-card, MTP) | 260,541 | barely; per-card free space < 1.2 GiB |
 | Monster (4-card, MTP, `-ngl 47`) | **89,043** | the only stack that cannot stand in the full window |
