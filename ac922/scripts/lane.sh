@@ -164,7 +164,11 @@ case "$ACTION" in
     verify || exit 1
     card_mem | sed -n '1,6p'
     [ "$CARDS" = 4 ] && { log "leftover cards 4/5:"; holders | grep -E "card 4|card 5" || log "  free"; }
-    [ "$REANCHOR" = 1 ] && reanchor
+    # Exit status is the contract: `&& reanchor` left a successful boot returning 1 whenever
+    # --reanchor was not passed, which silently aborted a chained `lane4.sh restart && <measure>`
+    # run on 2026-11-17 (the geometry printed GEOMETRY-PASS and the harness never started).
+    if [ "$REANCHOR" = 1 ]; then reanchor; fi
+    exit 0
     ;;
   stop)   bash "$RUN" stop;;
   restart) bash "$RUN" stop; wait_free; sleep 5; "$0" "$CARDS" start $([ $REANCHOR = 1 ] && echo --reanchor);;
