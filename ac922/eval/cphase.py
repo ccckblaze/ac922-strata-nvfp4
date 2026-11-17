@@ -48,7 +48,12 @@ def mutate(spec):
     json.dump(d, open(CFG, "w"), indent=1)
 
 def sh(cmd, to=None):
-    return subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, timeout=to).stdout
+    # Redirect to a file, not a captured pipe: run.sh start leaves daemonized
+    # grandchildren alive, and a captured pipe never sees EOF, hanging us there.
+    out = open(OUTD + "/sh.log", "ab")
+    subprocess.run(["bash", "-lc", cmd], stdout=out, stderr=subprocess.STDOUT, timeout=to)
+    out.close()
+    return ""
 
 def health():
     req = urllib.request.Request(URL + "/health", headers={"Authorization": "***" + KEY})
