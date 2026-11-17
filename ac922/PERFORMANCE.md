@@ -116,3 +116,49 @@ product** (≈61% of window time), GPU-reach wait ≈28%, host CPU ≈12%. Conse
   (`--batch-groups` with ≥2 rows), which is exactly what the adopted ring shape does;
 - host-wait reduction levers adopted: NUMA bind + PLE park; the remaining big lever (FP4
   tensor-core expert kernels, ticket ⑧/QPN2) is parked upstream-side, not ported.
+
+## 6. Full-window concurrency ceiling (2026-11-17, measured on the ship config)
+
+Question: does the "one full-window stream per card" rule actually hold at 6 cards?
+Answer: **yes, and the wall is VRAM per card, not RAM.**
+
+Ship geometry (`--batch 6 --batch-groups 3`, `--kv int8`, `--kv-resident 32768`,
+`--max-context 262144`, warm prefix), 6 independent streams (start-of-prompt marker makes every
+prefix distinct, so no cross-stream sharing), temperature 0:
+
+| Depth / stream | reused | sum_tg | wall_tg | per-stream tg | TTFT | streams scored |
+| --- | ---: | ---: | ---: | --- | --- | ---: |
+| 234,300 (gen 1024) | 100% | 121.8 | — | 15.4-26.7 | 1.5-14.6 s | 6/6 |
+| **258,780 = 98.7% of 262,144** | 100% | **131.2** | 84.3 | 15.5-31.9 (med 19.7) | 1.2-15.5 s | 6/6 |
+
+Both runs decode inside one overlapping window (`decode_live_s` 29.9 s of a 31.1 s span,
+rows/step 2.96 against a shape of 3 groups of 2), no refusals, no errors, `dropped_streams: 0`.
+Five of the six streams ended early on `finish_reason=stop` - the model closing its own turn at
+temperature 0 - which is why the depth row is quoted with 258,780 rather than the round 260,000
+target, and why `early_stop` is now reported apart from `dropped_streams` (§see DECISIONS.md D1).
+
+**Where the budget actually goes at 6 x ~259K**
+
+- **VRAM is the binding constraint.** All six cards settle at 15.2-15.35 GiB of 16.38 GiB -
+  ~1 GiB per card left. Six 32K resident windows plus the expert cache is exactly what fills a
+  V100-16 under this geometry. A 7th stream, or pushing these to the literal 261,632-token maximum,
+  has nowhere to grow.
+- **RAM is bounded by design and degrades gracefully.** The conversation cache parked ~4.8 GiB per
+  258,780-token conversation (18.4 KB/token in parked form - this is a GDN-hybrid model, so the
+  parked state is nowhere near the 0.22 MB/token a dense-FA model would need), i.e. ~29 GiB for the
+  six live conversations. `--conversation-cache-mib 98304` is the ceiling, and after a day of
+  benchmarking it is reached: `parked=24 bytes=95.6 GiB evictions=9`. `MemAvailable` then sits at a
+  steady 3.7 GiB with swap off - **not** a leak, not thrash: the engine evicts parked conversations
+  instead of failing, vmstat shows no swap activity, and `/health` stays 200 throughout.
+
+**The one open cost, and the cheap experiment it suggests**
+
+CC at its 96 GiB cap means 24 stale parked conversations squat on memory that the expert page cache
+wants - and the page cache is the engine's declared prefill input (`prefill plan inputs: ...
+112.3 GiB available for the page cache`). Squeezing it is what makes cold prefill pay major faults.
+Since the stated rule only needs ~29 GiB of park for 6 full-window streams, sizing CC to roughly
+48 GiB (`--conversation-cache-mib 49152`) should hand ~48 GiB back to the page cache at no
+concurrency cost. Predicted effect: prefill (cold/warm-miss) faster, decode unchanged. Not yet
+measured - it needs a paired A/B at 6 x full window plus a cold-prefill arm, and it touches the
+eviction path, so it goes through the normal gates (`selfcheck` then `qualgate`, with `det`
+bitwise as the numeric anchor).
