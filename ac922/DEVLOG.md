@@ -324,13 +324,44 @@ Kernel self-check for the new binary, on a free card (`CUDA_VISIBLE_DEVICES=5`, 
 lane): `qsa_topk_parity --selftest` PASS (identical ids across all six row classes at 262,144 /
 300,001 / 524,288), `gr_parity` 0 failures, `dequant_wide_parity` 360 cases bitwise OK.
 
-**Switch pending operator approval.**  Plan: `lane4.sh stop` -> `mv build build.pre-repo && mv
-build-new build` (same for `build-vision`) -> `lane4.sh start` -> `qualgate.sh check` against
-`det = bfd40ecd4692`, `acc-drift-ok`, three `sbench.py det` runs, `fullwindow.py run --n 4 --gen 512
---total 262144` (8/8 rows at prompt+gen = 262,136 with `finish=length`), `lane4.sh status`
-GEOMETRY-PASS, and exactly one new `engine started:` line.  Rollback is the inverse `mv` plus
-`start`.  Anchors taken before the switch: `/health` 200 with `max_context 262144`, GEOMETRY-PASS on
-cards 0-3, engine log at 36,810,170 B with 418 `engine started:` lines.
+**Switch executed at 22:52, lane ready 77 s later.**  `lane4.sh stop` released cards 0-3 to <=141
+MiB; `mv build build.pre-repo && mv build-new build` and the same for `build-vision`; `lane4.sh
+start`.  `build/CMakeCache.txt` now names `/data/work/ac922-strata-nvfp4` as its source - until this
+boot the shipping binary had never been produced by the delivery tree.  Rollback is the inverse `mv`
+plus `start`; both old build directories are intact as `*.pre-repo`.
+
+**Every gate green on the repo-built binary.**  `qualgate.sh check repo-build` -> QUALGATE-PASS with
+zero FAIL lines; `det` three runs all `bfd40ecd4692`, which is the factory anchor and `REF.json`;
+`acc-drift-ok 1.0`; `relay-cell-agreement 2/8 = 0.25`, the documented healthy noise floor in
+`qualgate.sh` and not a regression.  `lane4.sh status` -> GEOMETRY-PASS on 4 cards (0,1,2,3), 2
+groups of 2, shim loaded.  `engine started:` went 418 -> 419: exactly one boot, no respawn hiding
+behind a green `/health`.  VRAM after start 14831/14726/14733/15120 MiB on cards 0-3, cards 4/5 idle
+at 65/20 MiB, `MemAvailable` 92.3 GiB.
+
+**Full window held, and it got faster.**  `fullwindow.py run --n 4 --gen 512 --total 262144`:
+`all_prompt_exact true`, ptok `261632` x4, ctok `504` x4, prompt+gen `262136` x4, `finish=length` x4,
+span 23.1 s, `sum_tg 109.3` against the factory pair 105.8/108.0 (median 106.9) - +2.2%, so the
+switch bought no regression.  tg per stream `[23.77, 26.81, 27.48, 31.28]`, ttft
+`[1.7, 3.6, 4.75, 6.44]`.  The warm rows show the restore path working: 58.1/58.0 s ttft when the
+window has to be recomputed vs 2.0/1.53 s when the conversation cache answers it.
+
+**Multimodal works on what we now ship.**  Same prompt text-only `ptok=67`, with an attached image
+`ptok=419` (delta 352, `vision_tokens_consumed=True`), both `finish=stop`, and the two completions
+differ - so the image reaches the model rather than being tokenized away.  One trap worth repeating:
+at `max_tokens=32` the `content` field comes back empty because the model spends the budget on
+`reasoning_content` first; `RUN.md` says smoke probes need `max_tokens>=256`.
+
+**A harness bug found on the way, and it was the gate that was wrong.**  `window_fully_consumed`
+counts rows where `ctok == gen`, but a stream that consumes the last byte of the window is cut off
+with *fewer* than `gen` tokens - so at the byte-exact edge that invariant can never report success.
+All four rows sat on prompt+gen 262,136 with `finish=length` while the flag read `0`.  `fullwindow.py`
+now also computes `held_edge`: finish=length, every stream parked on the same position, and that
+position plus the tokens a stream still wanted reaching `total` (the window closed on it,
+`max_tokens` did not), printing `FULLWINDOW-PASS n/n held the window edge at prompt+gen=<edge>`.  The
+comparison is `>=` because the engine's own reservation at the top of the window is exactly the
+difference: 262,136 + 8 = 262,144.
+`window_fully_consumed` is kept for compatibility.  The real sentence for the record is **4/4 held
+the window edge**, not 8/8 rows.
 
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
@@ -387,3 +418,7 @@ cards 0-3, engine log at 36,810,170 B with 418 `engine started:` lines.
     the drift is invisible when the flags default ON.  Diff the build cache of the live build directory
     against a fresh configure key by key, and keep one flag spelled out even when it is the default if
     it is a plain variable rather than an `option()`.
+15. A gate can be unreachable by construction.  `window_fully_consumed` required `ctok == gen` at
+    the byte-exact window edge, where a genuinely full window guarantees `ctok < gen`; the invariant
+    was fine and the assertion was decoration.  Assert the thing you mean (the window closed on the
+    stream), not the first observable that looked like it.

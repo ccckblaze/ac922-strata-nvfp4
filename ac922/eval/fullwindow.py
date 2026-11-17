@@ -160,6 +160,18 @@ def run():
     span = round(time.time() - t0, 2)
     tgs = [x["tg"] for x in out if x.get("tg")]
     full = [bool(x["ok"] and x["finish"] == "length" and (x["ctok"] or 0) == gen) for x in out]
+    # `full` is unreachable by construction at the byte-exact edge: a stream that consumes the whole
+    # window is cut off with fewer than `gen` tokens, so `window_fully_consumed: 0` read as a failure
+    # is a harness artifact.  The honest window invariant is `held_edge` below: finish=length, every
+    # stream parked on the same prompt+gen position, and that position plus the tokens the stream
+    # still wanted reaching the configured window (the window closed on it, max_tokens did not).  It
+    # is `>=`, not `>`: the engine keeps a few bytes of its own at the top of the window, so a row
+    # cut exactly at the edge wanted precisely what that reservation holds.
+    pgs = [(x.get("ptok") or 0) + (x.get("ctok") or 0) for x in out]
+    edge = max(pgs) if pgs else 0
+    held = [bool(x["ok"] and x["finish"] == "length" and p == edge
+                 and (x["ctok"] or 0) < gen and edge + (gen - (x["ctok"] or 0)) >= total)
+            for x, p in zip(out, pgs)]
     print(json.dumps({
         "n": n, "total": total, "prompt_target": target, "gen": gen, "span": span,
         "ptok": [x.get("ptok") for x in out],
@@ -167,12 +179,18 @@ def run():
         "ctok": [x.get("ctok") for x in out],
         "finish": [x.get("finish") for x in out],
         "window_fully_consumed": sum(full),
+        "held_edge": sum(held), "edge_position": edge, "all_held_edge": bool(held) and all(held),
         "prompt_plus_gen": [ (x.get("ptok") or 0) + (x.get("ctok") or 0) for x in out],
         "ttft": [x.get("ttft") for x in out], "tg": tgs,
         "sum_tg": round(sum(tgs), 1) if tgs else None,
         "tg_min": min(tgs) if tgs else None, "tg_max": max(tgs) if tgs else None,
         "errors": sorted(set(str(x.get("finish")) for x in out if not x["ok"])) or None,
     }, sort_keys=True))
+    if held and all(held):
+        print("FULLWINDOW-PASS %d/%d held the window edge at prompt+gen=%d" % (len(held), len(held), edge))
+    else:
+        print("FULLWINDOW-FAIL held_edge %d/%d edge=%d - a stream stopped for another reason "
+              "(EOS-early, an error, or it did not reach the edge)" % (sum(held), len(held), edge))
 
 
 ({"probe": probe, "run": run}.get(sys.argv[1] if len(sys.argv) > 1 else "run"))()
