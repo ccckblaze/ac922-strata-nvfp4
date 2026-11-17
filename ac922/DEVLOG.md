@@ -266,6 +266,38 @@ Production stayed on the 4-card lane (8091) the whole phase; everything below ra
   `STRATA_WATCHDOG_IO_S` does not cover it: the reads are page-cache hits, so the file-tier counter
   that grants it never moves).
 
+
+### H.1 — the first tickets run on the dev lane
+
+**The dev lane cannot price decode tickets, and here is the measurement that says so.** With the
+shape a 2-card lane can hold (`--resident-budget-gib 40`, `--vram-reserve-mib 3072`, expert cache
+2457 slots = 6.33 GiB/card), a 126K-window decode looks like this (own engine self-report,
+`STRATA_DECODE_TIMING=1`, 8 requests/arm, medians):
+
+| arm | ms/window | verify | GPU-reach wait | per-layer host | CPU experts × 48 | tg |
+| --- | --- | --- | --- | --- | --- | --- |
+| control | 208.07 | 196.33 | 12.23 | 64.40 | 72.0 | 7.55 |
+| `STRATA_TOPK_COMPACT=1` | 228.02 | 215.38 | 12.50 | 76.27 | 65.8 | 7.40 |
+
+The window here costs ~200 ms and ~35% of it is experts computed on the **host CPU** with
+3.6-7.3 cache swaps per window: this is a cache-starved regime, not the ship regime (whose window is
+~30 ms at tg 66). Anything under ~2 ms/window is invisible, and the arm order is decided by which
+boot happened to cache more experts. Two conclusions, both recorded: the sister fork's window split
+(expert product 61% / GPU-reach 28% / host 12%) **does not reproduce on this box** at thin cache
+coverage, and decode tickets have to be measured on the ship lane.
+
+**`STRATA_TOPK_COMPACT`: ported, exact, and worth less than the ticket claimed.** The parity harness
+passes with the narrowing on *and* off (identical ids on continuous / 64-level / equal-score /
+signed-zero+infinity / NaN / spread-tie rows at 262,144, 300,001 and 524,288 tokens), so it is
+quality-neutral by construction. Its price comes from the matched harness lines, not from a serving
+number: at the widest case (524,288 tokens, 64 queries) the reference call is 1.185 ms, the default
+dispatch 0.475 ms and the compact dispatch 0.351 ms. Per query that is 0.0013-0.0019 ms saved; a
+decode window carries ~2 queries per layer over 48 layers, so a window saves **0.13-0.19 ms** - about
+**+0.4-0.6%** of the ship lane's ~30 ms window budget. That is the same order as the 责任田 sieve's
+independent estimate (+0.8%) and below the 1.5% adoption bar, and it explains why a sister fork
+measured +3.5-4%: their selector call shape is not this engine's. Decision in `DECISIONS.md`: keep
+the code and its ctest arm (opt-in, default off), do not put it in the shipping exports.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -312,4 +344,8 @@ Production stayed on the 4-card lane (8091) the whole phase; everything below ra
     directory had been configured against the pre-delivery source tree, so three platform fixes
     (ppc64le ggml quants, the CUDA 12.4 FP4 include, the C++20 host compiler) lived only in that tree
     and nothing noticed.  One clean `cmake` on the target architecture found all three.
-
+13. A dev lane reproduces a *topology*, not a *regime*.  Two cards hold the full window but not the
+    ship lane's expert-cache coverage, so their decode window is ~7x longer and dominated by host-CPU
+    experts with swaps every window.  Sorting a decode ticket there ranks boot luck.  It is the right
+    place to prove a build compiles, a deep window serves and a kernel is bit-exact; it is the wrong
+    place to price a kernel.

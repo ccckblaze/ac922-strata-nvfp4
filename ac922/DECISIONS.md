@@ -406,3 +406,50 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   without them changes no behaviour, and the repo states only mechanisms this box has measured. When
   either mechanism earns its numbers (the NUMA one belongs with the remote-read remediation, the dedup
   one with the same-moment-burst work), it lands as its own commit with its own A/B - not as cargo.
+
+## Kept but not enabled: `STRATA_TOPK_COMPACT` (ported 2026-11-17, measured the same evening)
+
+- **What it is.** An opt-in CUDA narrowing of the QSA long-row top-k (one probe + one weighted
+  histogram over a monotone 12-bit key picks the bucket holding the width-th cell; only that bucket is
+  refined with the byte-radix rule, and the emit keeps the wide kernel's ascending-cell tie rule).
+  Ported from `Strata-V100 53a36c9b`, upstream `1CatAI/1Cat-vLLM#1171`.
+- **Quality.** Exact, and checkable: `qsa_topk_parity --selftest` passes with the flag off **and** on,
+  with identical ids on continuous / 64-level / equal-score / signed-zero+infinity / NaN / spread-tie
+  rows at 262,144, 300,001 and 524,288 tokens. A ctest arm runs the selftest with the flag set. Scores
+  stay fp32, so nothing about the selection semantics moves.
+- **Value on this box.** From the matched harness lines, not from a serving run: the widest case
+  (524,288 tokens, 64 queries) costs 1.185 ms (reference) / 0.475 ms (this tree's default dispatch) /
+  0.351 ms (compact). Per query 0.0013-0.0019 ms saved; a decode window carries ~2 queries per layer
+  over 48 layers → **0.13-0.19 ms per window**, i.e. **+0.4-0.6%** of the ship lane's ~30 ms window at
+  tg 66. Our own independent sieve had said +0.8%. Both sit under the 1.5% adoption bar.
+- **Decision.** Keep the code and its test (it is exact, and it is the cheaper kernel at every shape),
+  leave the flag unset in `ac922/scripts/adopted-env.sh`, and revisit only if the ship lane's own
+  window decomposition ever names the selector. A sister fork's +3.5-4% does not transfer: their
+  selector call shape is not this engine's, and this tree's default dispatch was already 2.3-2.7x the
+  reference before the narrowing.
+- **Not measured here.** A 2-card dev lane's window is ~200 ms and host-CPU dominated, so the flag's
+  effect is far below its noise; see `DEVLOG.md` H.1 for the two-arm table.
+
+## Recon, not adopted: `serve/replicas.py` (data-parallel replicas) on this box (2026-11-17)
+
+- **What it offers.** `replicas: N` runs N independent engines behind one HTTP front, routing each
+  request to the replica with the cheapest re-read. It buys real concurrency (N pipelines), which the
+  single engine's slots cannot: `two replicas run two pipelines`, and its router already tracks
+  64-token block hashes per replica plus an optional shared parking pool.
+- **Why it is not the answer to concurrency here.** Three walls, in order of hardness:
+  1. **RAM, not the arena.** Each engine keeps its own expert copy (~65-72 GiB); the shared-arena
+     option exists (`replica_shared_arena` / memfd) but `--resident-budget-gib` is in
+     `ARENA_INCOMPATIBLE`, and dropping that flag is exactly what un-locks the expert set from RAM into
+     reclaimable page cache - the failure class this box was stabilised against.
+  2. **The window invariant.** Our ship rule is one full window (262,136) per card group sized to hold
+     it. A 2-card replica does not hold a full window's resident KV; and hosting `replicas x 2` full
+     windows needs ~57.7 GiB of host KV per chain, so 3 replicas x 2 chains ≈ 346 GiB against a
+     256 GiB box. The KV host tier, not the expert arena, is what makes replicas-of-full-windows
+     unreachable.
+  3. **Stage count cuts both ways.** Fewer cards per replica means fewer pipeline stages (the sister
+     box's 2-card tg ≈ our 6-card tg), but our own 4→6-card aggregate moved only +7.5%, so there is no
+     stage-count windfall waiting to pay for the lost window.
+- **Where it could still matter.** A *mixed* fleet: the ship lane keeps the full-window invariant, and
+  a separate short-window lane serves small requests on its own cards - which is exactly what
+  `ac922/scripts/devlane.sh` already is, without pretending to be one server. Adopting `replicas`
+  would only be worth its risk if one front door and one config were a hard requirement.
