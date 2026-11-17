@@ -22,6 +22,9 @@ ARMS = {
     "T1":    {"trim": True},
     "P1T":   {"profile": LEARN, "adapt0": True, "trim": True},
     "RESTORE": {"restore": True},
+    "CTL2": {}, "CTL3": {},
+    "P1b":   {"profile": LEARN}, "P1c": {"profile": LEARN},
+    "T1b":   {"trim": True},     "T1c":  {"trim": True},
 }
 
 def mutate(spec):
