@@ -361,7 +361,10 @@ position plus the tokens a stream still wanted reaching `total` (the window clos
 comparison is `>=` because the engine's own reservation at the top of the window is exactly the
 difference: 262,136 + 8 = 262,144.
 `window_fully_consumed` is kept for compatibility.  The real sentence for the record is **4/4 held
-the window edge**, not 8/8 rows.
+the window edge**, not 8/8 rows.  Verified on the live lane at 23:15 with `--n 1`: `FULLWINDOW-PASS
+1/1 held the window edge at prompt+gen=262136`, `ctok=504`, old flag still `0`, tg 54.16 with warm
+ttft 1.11 s (the restore path answering a 261,632-token prompt), and the boot count stayed at 419, so
+the probe cost the lane nothing.
 
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
