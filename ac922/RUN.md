@@ -36,13 +36,14 @@ here works without touching `configs/strata-nvfp4-final.json`.
 2. Build the engine (`BUILD.md`) and, if this box has two NUMA islands like ours, the shim:
    `gcc -O2 -shared -fPIC ac922/scripts/numabind.c -o numabind.so -ldl`.
 3. Start the lane:
-   - 6-card: `GPUS=0,1,2,3,4,5 NB_CUT=0.5 bash ac922/scripts/strata-nvfp4-run.sh start`
-   - 4-card: `GPUS=0,1,2,3 NB_CUT=0.69 STRATA_BATCH=4 STRATA_BATCH_GROUPS=2 bash ac922/scripts/strata-nvfp4-run.sh start`
+   - 4-card (the shipped shape): `bash ac922/scripts/strata-nvfp4-run.sh start`
+   - 6-card: `GPUS=0,1,2,3,4,5 bash ac922/scripts/strata-nvfp4-run.sh start`
    Card count is a launch-time geometry, not a hot switch: `stop`, wait for per-card VRAM to
    drop below the reserve, then `start` with the other env set (about 2-7 min to `loaded:true`).
-   `STRATA_BATCH`/`STRATA_BATCH_GROUPS` rewrite the pinned config's batch pair in place — the
-   6-card default (6/3) needs no override; pass 4/2 on a 4-card boot and check the geometry
-   line reports `2 groups of 2`.
+   The launcher derives the batch pair and the NUMA cut from the card count (4-card 4/2 with
+   `NB_CUT=0.69`, 6-card 6/3 with `NB_CUT=0.5`), so switching geometry is one variable;
+   `STRATA_BATCH`/`STRATA_BATCH_GROUPS`/`NB_CUT` still override it for experiments. Check the
+   geometry line reports `2 groups of 2` on a 4-card boot.
    `NB_CUT` is the expert-arena NUMA split and must track the card:island ratio (0.5 for 3:3,
    0.69 for 3:1). The launcher calls `ple_park.sh 500` (splits the 48.8 GiB PLE page cache across
    both islands) and `LD_PRELOAD=numabind.so` (arena placement) — both are documented in
@@ -57,12 +58,12 @@ here works without touching `configs/strata-nvfp4-final.json`.
 
 ## Development lane on the leftover cards (requires operator authorization)
 
-Once the pinned lane drops to the 4-card geometry (B4: `GPUS=0,1,2,3`, `NB_CUT=0.69`,
-see step 3 above), cards 4/5 free up for an independent dev/iteration instance:
+Once the pinned lane holds the 4-card geometry (the shipped default, see step 3 above), cards
+4/5 free up for an independent dev/iteration instance:
 
 ```
 bash ac922/scripts/devlane.sh check    # who holds the dev cards, RAM available
-GPUS=... STRATA_BATCH=4 STRATA_BATCH_GROUPS=2 bash ac922/scripts/strata-nvfp4-run.sh start   # prod -> B4 (authorized)
+bash ac922/scripts/strata-nvfp4-run.sh start                       # prod lane, 4 cards (default)
 bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
 ```
 
@@ -108,7 +109,14 @@ one token per request.
 
 ## Geometry switching and rollback
 
-`stop` then `start` with the other `GPUS`/`NB_CUT`. The adopted state is fully described by:
-launcher exports + `configs/strata-nvfp4-final.json` + engine pin. Keep dated backups of the
-launcher before edits; adopt changes through the paired A/B protocol in `METHODOLOGY.md`, never
-by vibes.
+`stop` then `start` with the other `GPUS` — nothing else, the batch pair and `NB_CUT` follow the
+card count. The adopted state is fully described by: launcher exports +
+`configs/strata-nvfp4-final.json` + engine pin. Keep dated backups of the launcher before edits;
+adopt changes through the paired A/B protocol in `METHODOLOGY.md`, never by vibes.
+
+The quality reference is per geometry: `/data/work/qualgate/REF.json` belongs to the shape the
+lane is running, and the previous shape stays beside it as `REF-<cards>-<date>.json`.  Switching
+geometry means re-anchoring (`qualgate.sh baseline`) after a warm-up round, then verifying in the
+same boot that the det hashes still equal the other geometry's — the det fixture is bitwise across
+geometries (measured 2026-11-17: 4-card and 6-card both `bfd40ecd4692`), so a det change is a real
+numeric regression, while relay-cell agreement against a cross-geometry REF has no verdict power.

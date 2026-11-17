@@ -8,9 +8,10 @@
 # Here SRC defaults to this repo root, so "compile from here, run from here" works:
 #   cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 && cmake --build build -j
 #   bash ac922/scripts/strata-nvfp4-run.sh start
-# GPUS env selects the geometry: default 0,1,2,3,4,5 (6-card symmetric: GPU0-2 = NUMA node0
-# NVLink triangle, GPU3-5 = node8 triangle). GPUS=0,1,2,3 restores the 4-card lane.
-# NB_CUT is the expert-arena NUMA split and must track the island ratio (0.5 for 3:3, 0.69 for 3:1).
+# The shipped shape is 4-card (GPU0-3, NUMA node0's NVLink triangle plus one card on node8); cards
+# 4/5 stay free for the dev lane. GPUS=0,1,2,3,4,5 boots the 6-card symmetric geometry
+# (GPU0-2 = node0 triangle, GPU3-5 = node8 triangle). batch/batch-groups and NB_CUT follow the
+# card count automatically, so a geometry switch is one env var and nothing else.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
@@ -89,9 +90,15 @@ start(){
   # the dev lane — see adopted-env.sh (SM70_TABLE / PF_WMMA / FUSE_DECODE / ARGMAX_ROWS_SM70 /
   # select-simt / batchenv, all default-on unless the caller overrides).
   . "$HERE/adopted-env.sh"
-  GPUS=${GPUS:-0,1,2,3,4,5}
+  GPUS=${GPUS:-0,1,2,3}
   export CUDA_VISIBLE_DEVICES="$GPUS"
-  export NB_CUT=${NB_CUT:-0.5}
+  IFS=, read -ra _G <<< "$GPUS"
+  case ${#_G[@]} in
+    4) _CUT=0.69 ;;   # 3 cards on node0, 1 on node8
+    6) _CUT=0.5 ;;     # symmetric 3:3
+    *) _CUT=0.5 ;;
+  esac
+  export NB_CUT=${NB_CUT:-$_CUT}
   # The default geometry is 6-card, so a bare `start` on a box whose 4/5 cards belong to the dev lane
   # (or to a cooperating thread) used to silently straddle all six.  Refuse unless the cards are free.
   if [ "${FORCE:-0}" != 1 ]; then
@@ -103,9 +110,9 @@ start(){
   if [ -f "$NUMABIND_SO" ]; then export LD_PRELOAD="$NUMABIND_SO"; fi
   TS=$(date -u +%FT%TZ)
   LOG="$LOGD/strata-nvfp4-$TS.log"; echo "LOG=$LOG"; echo "GPUS=$CUDA_VISIBLE_DEVICES NB_CUT=$NB_CUT"
-  # Rewrite the reference config onto this machine's layout (paths only; args untouched except
-  # the batch pair — STRATA_BATCH / STRATA_BATCH_GROUPS rewrite them in place, so a 4-card boot
-  # must pass 4/2 and a 6-card boot 6/3 explicitly if the defaults below ever change).
+  # Rewrite the reference config onto this machine's layout (paths only; args untouched except the
+  # batch pair, which defaults to the accepted shape for the card count: 4-card 4/2, 6-card 6/3.
+  # STRATA_BATCH / STRATA_BATCH_GROUPS still override it explicitly for experiments.)
   python3.11 - "$BASE" "$RUN" "${STRATA_BATCH:-0}" "${STRATA_BATCH_GROUPS:-0}" "$SRC" "$MODEL_DIR" "$LOGD" <<'PY'
 import json,os,sys
 base,out,batch,groups,src,model_dir,logd=(sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4]),
@@ -132,6 +139,10 @@ def setflag(name,val):
         c["args"][c["args"].index(name)+1]=str(val)
     else:
         c["args"]+=[name,str(val)]
+ncard=len(c["gpu"])
+if batch<2 and groups<2 and ncard in (4,6):
+    batch,groups=(4,2) if ncard==4 else (6,3)
+    print("auto batch shape for %d cards: %d/%d" % (ncard,batch,groups))
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
 if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"])
@@ -147,10 +158,9 @@ if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_C
 # CC_MIB explicit so the worst case stays inside the box's real headroom.  Unset = shipped values.
 if os.environ.get("CC_SLOTS"): setflag("--conversation-cache-slots",os.environ["CC_SLOTS"])
 if os.environ.get("CC_MIB"): setflag("--conversation-cache-mib",os.environ["CC_MIB"])
-ncard=len(c["gpu"])
 fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
-if batch<2 and groups<2 and fbatch!=ncard:
-    print("NOTE: effective --batch %d on %d cards (accepted shapes: 6-card 6/3, 4-card 4/2)" % (fbatch,ncard))
+if fbatch!=ncard:
+    print("NOTE: effective --batch %d on %d cards is not an accepted shape (4-card 4/2, 6-card 6/3)" % (fbatch,ncard))
 if fbatch%fgroups: print("WARNING: --batch %d not divisible by --batch-groups %d" % (fbatch,fgroups))
 json.dump(c,open(out,"w")); print("batch=",batch)
 PY

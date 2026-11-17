@@ -48,9 +48,9 @@
   "--aux-cpus",
   "auto",
   "--batch",
-  "6",
+  "4",
   "--batch-groups",
-  "3",
+  "2",
   "--trim-stage-weights"
  ],
  "gpu": [
