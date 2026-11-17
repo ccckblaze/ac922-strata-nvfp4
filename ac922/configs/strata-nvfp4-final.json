@@ -14,7 +14,7 @@
   "--embd-gguf",
   "/data/work/Strata-data/models/nvfp4-gptq/token-embd-bf16.gguf",
   "--expert-profile",
-  "/data/work/strata-nvfp4-src/data/expert-profile.bin",
+  "/data/work/strata-nvfp4-src/data/expert-profile-learned.bin",
   "--expert-cache",
   "auto",
   "--prefill",
@@ -50,7 +50,8 @@
   "--batch",
   "6",
   "--batch-groups",
-  "3"
+  "3",
+  "--trim-stage-weights"
  ],
  "gpu": [
   0,
