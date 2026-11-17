@@ -19,6 +19,7 @@ RUN="$HERE/strata-nvfp4-run.sh"
 ENV_SH=${ENV_SH:-/etc/profile.d/env.sh}
 [ -n "${STRATA_API_KEY:-}" ] || { [ -f "$ENV_SH" ] && . "$ENV_SH"; }
 CARDS=${1:-}; ACTION=${2:-start}; shift 2 2>/dev/null || true
+STATE=${STATE:-/tmp/strata-nvfp4-lane.state}       # engine-log byte offset of the boot we started
 REANCHOR=0
 for a in "$@"; do [ "$a" = "--reanchor" ] && REANCHOR=1; done
 PORT=${PORT:-8091}
@@ -29,8 +30,8 @@ QUALGATE_DIR=${QUALGATE_DIR:-/data/work/qualgate}
 EVAL_DIR=${EVAL_DIR:-$REPO/ac922/eval}
 
 case "$CARDS" in
-  4) GPUS=${GPUS:-0,1,2,3};   EXPECT_BATCH="2 groups of 2"; EXPECT_STAGES=4 ;;
-  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_BATCH="3 groups of 2"; EXPECT_STAGES=6 ;;
+  4) GPUS=${GPUS:-0,1,2,3};     EXPECT_GROUPS=2 ;;
+  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=3 ;;
   *) echo "usage: $(basename $0) <4|6> <start|stop|restart|status> [--reanchor]"; exit 2 ;;
 esac
 export GPUS CUDA_VISIBLE_DEVICES="$GPUS"
@@ -66,20 +67,51 @@ engine_log(){ # the launcher writes the real path into the run json; trust that,
   local rj=${RUN_JSON:-$REPO/strata-nvfp4.run.json}
   [ -f "$rj" ] && python3.11 -c "import json;print(json.load(open('$rj'))['log'])" 2>/dev/null
 }
+engine_pid(){ pgrep -f "build/strata --serve" | head -1; }
+boot_slice(){ # THIS boot's engine-log lines only.  The engine log is appended across boots, so
+  # "the last shape line" and "any NUMA line in the file" are both stale by construction: measured
+  # 2026-11-17, a 6-card boot read back as "2 groups of 2" because the newest runtime stats line
+  # still belonged to the 4-card lane that ran before it.  Prefer the recorded byte offset; fall
+  # back to the last per-boot startup marker when someone booted without this script.
+  local L=$1 off=0 n
+  [ -f "$STATE" ] && off=$(sed -n 's/^off=//p' "$STATE" | head -1)
+  if [ "${off:-0}" -gt 0 ] 2>/dev/null && [ "$off" -le "$(stat -c %s "$L")" ]; then
+    tail -c +$((off + 1)) "$L"
+  else
+    n=$(grep -an "pipelined groups of" "$L" | tail -1 | cut -d: -f1)
+    sed -n "${n:-1},\$p" "$L"
+  fi | tr '\r' '\n'
+}
 verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engine log at $L"; return 1; }
-  local shape stages split numa
-  shape=$(tr '\r' '\n' < "$L" | grep -a "batch (pipelined" | tail -1)
-  split=$(tr '\r' '\n' < "$L" | grep -a "serve: layer split: layers" | tail -1)
+  local S shape split stages remote firsttouch p pre vis
+  S=$(boot_slice "$L")
+  # The startup line, not the runtime one: the runtime `batch (pipelined, ...)` stats line only
+  # exists once traffic has flowed, and when it does it can belong to an earlier boot.
+  shape=$(echo "$S" | grep -a "STRATA_PIPED_MTP:" | tail -1)
+  split=$(echo "$S" | grep -a "serve: layer split: layers" | tail -1)
   stages=$(echo "$split" | grep -o "CUDA[0-9]" | sort -u | wc -l | xargs)
-  numa=$(tr '\r' '\n' < "$L" | grep -ac "NUMA placement FAILED\|the split runs with remote reads")
-  log "engine log: $L"
-  log "  shape : ${shape:-<none>}"
-  log "  split : ${split:-<none>}"
-  log "  numa  : ${numa} FAILED/remote-read lines"
-  echo "$shape" | grep -q "$EXPECT_BATCH" || { log "GEOMETRY-FAIL expected '$EXPECT_BATCH' on $CARDS cards"; return 1; }
+  remote=$(echo "$S" | grep -ac "the split runs with remote reads")
+  firsttouch=$(echo "$S" | grep -ac "NUMA placement FAILED")
+  p=$(engine_pid)
+  pre=""; vis=""
+  [ -n "$p" ] && pre=$(tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -m1 "^LD_PRELOAD=")
+  [ -n "$p" ] && vis=$(tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -m1 "^CUDA_VISIBLE_DEVICES=")
+  log "engine log: $L (pid ${p:-none})"
+  log "  shape : ${shape##*generate: }"
+  log "  split : ${split##*serve: }"
+  log "  shim  : ${pre:-LD_PRELOAD=<unset>}"
+  log "  numa  : ${remote} remote-read lines, ${firsttouch} first-touch placement notes"
+  echo "$shape" | grep -q "$EXPECT_GROUPS pipelined groups of 2 slots" ||
+    { log "GEOMETRY-FAIL expected $EXPECT_GROUPS pipelined groups of 2 slots on $CARDS cards"; return 1; }
   [ "$stages" = "$CARDS" ] || { log "GEOMETRY-FAIL engine reports $stages stages, expected $CARDS"; return 1; }
-  [ "$numa" = 0 ] || { log "GEOMETRY-FAIL NUMA shim not effective: this boot is not comparable"; return 1; }
-  log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_BATCH"
+  [ "${vis#*=}" = "$GPUS" ] || { log "GEOMETRY-FAIL engine sees ${vis:-nothing}, expected $GPUS"; return 1; }
+  case "$pre" in *numabind.so*) ;; *) log "GEOMETRY-FAIL the NUMA shim is not in this process: numbers are not comparable"; return 1;; esac
+  [ "$remote" = 0 ] || { log "GEOMETRY-FAIL $remote remote-read lines: arena placement did not hold"; return 1; }
+  # "NUMA placement FAILED: this pack has no per-role byte sizes ... placed by first touch" is a
+  # property of the pack, printed on every boot including the anchored ones.  Report it, do not
+  # gate on it -- gating on it would fail every honest boot and teach people to ignore the script.
+  [ "$firsttouch" = 0 ] || log "  note  : expert complement placed by first touch (pack has no per-role sizes) - known, not a regression"
+  log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_GROUPS groups of 2, shim loaded"
 }
 reanchor(){ # REF is per geometry (DECISIONS.md): keep the old anchor, write this shape's, then check
   local ref="$QUALGATE_DIR/REF.json" keep="$QUALGATE_DIR/REF-${CARDS}card-$(date +%Y%m%d).json"
@@ -96,6 +128,8 @@ case "$ACTION" in
       exit 1
     fi
     log "layout: SRC=${SRC:-$REPO} LOGD=${LOGD:-default} GPUS=$GPUS"
+    L0=$(engine_log); OFF=0; [ -f "$L0" ] && OFF=$(stat -c %s "$L0")
+    { echo "off=$OFF"; echo "cards=$CARDS"; echo "gpus=$GPUS"; echo "ts=$(date -u +%FT%TZ)"; } > "$STATE"
     occ=$(bash "$RUN" status 2>/dev/null | sed -n '/== cards ==/,$p' | head -4)
     [ -n "$occ" ] && log "occupancy before: $occ"
     bash "$RUN" start || exit 1
