@@ -83,14 +83,14 @@ boot_slice(){ # THIS boot's engine-log lines only.  The engine log is appended a
   fi | tr '\r' '\n'
 }
 verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engine log at $L"; return 1; }
-  local S shape split stages remote firsttouch p pre vis
+  local S shape split stages pool firsttouch p pre vis
   S=$(boot_slice "$L")
   # The startup line, not the runtime one: the runtime `batch (pipelined, ...)` stats line only
   # exists once traffic has flowed, and when it does it can belong to an earlier boot.
   shape=$(echo "$S" | grep -a "STRATA_PIPED_MTP:" | tail -1)
   split=$(echo "$S" | grep -a "serve: layer split: layers" | tail -1)
   stages=$(echo "$split" | grep -o "CUDA[0-9]" | sort -u | wc -l | xargs)
-  remote=$(echo "$S" | grep -ac "the split runs with remote reads")
+  pool=$(echo "$S" | grep -ac "cpu pool: NUMA pool on")
   firsttouch=$(echo "$S" | grep -ac "NUMA placement FAILED")
   p=$(engine_pid)
   pre=""; vis=""
@@ -100,16 +100,20 @@ verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engin
   log "  shape : ${shape##*generate: }"
   log "  split : ${split##*serve: }"
   log "  shim  : ${pre:-LD_PRELOAD=<unset>}"
-  log "  numa  : ${remote} remote-read lines, ${firsttouch} first-touch placement notes"
+  log "  numa  : ${pool} NUMA cpu-pool lines, ${firsttouch} first-touch complement notes"
   echo "$shape" | grep -q "$EXPECT_GROUPS pipelined groups of 2 slots" ||
     { log "GEOMETRY-FAIL expected $EXPECT_GROUPS pipelined groups of 2 slots on $CARDS cards"; return 1; }
   [ "$stages" = "$CARDS" ] || { log "GEOMETRY-FAIL engine reports $stages stages, expected $CARDS"; return 1; }
   [ "${vis#*=}" = "$GPUS" ] || { log "GEOMETRY-FAIL engine sees ${vis:-nothing}, expected $GPUS"; return 1; }
   case "$pre" in *numabind.so*) ;; *) log "GEOMETRY-FAIL the NUMA shim is not in this process: numbers are not comparable"; return 1;; esac
-  [ "$remote" = 0 ] || { log "GEOMETRY-FAIL $remote remote-read lines: arena placement did not hold"; return 1; }
-  # "NUMA placement FAILED: this pack has no per-role byte sizes ... placed by first touch" is a
-  # property of the pack, printed on every boot including the anchored ones.  Report it, do not
-  # gate on it -- gating on it would fail every honest boot and teach people to ignore the script.
+  [ "$pool" = 1 ] || { log "GEOMETRY-FAIL the NUMA cpu pool did not come up (expected one slice per node)"; return 1; }
+  # The one NUMA line this pack always prints is
+  # "FileExpertSource: WARNING: NUMA placement FAILED: this pack has no per-role byte sizes ...
+  # the complement is placed by first touch as usual (the split runs with remote reads)".  It is a
+  # property of the pack layout, present on the anchored 4-card and 6-card boots alike, so it is
+  # reported and never gated: gating on it fails every honest boot, and the arena itself is covered
+  # by the LD_PRELOAD evidence above (the shim prints nothing on success).  Open ticket, unchanged:
+  # the complement still lands by first touch, which is why remote reads persist at 6 cards.
   [ "$firsttouch" = 0 ] || log "  note  : expert complement placed by first touch (pack has no per-role sizes) - known, not a regression"
   log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_GROUPS groups of 2, shim loaded"
 }
