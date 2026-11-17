@@ -73,7 +73,7 @@ Capacity rule that survived every experiment: **N cards ↔ N full-window stream
 
 | Step | Do this |
 | --- | --- |
-| Build | `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 && cmake --build build -j` — [`BUILD.md`](ac922/BUILD.md) |
+| Build | `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 -DCMAKE_CUDA_HOST_COMPILER=<gcc-12> && cmake --build build -j` (the engine is C++20: the system GCC 8.5 cannot host it) — [`BUILD.md`](ac922/BUILD.md) |
 | Run | `bash ac922/scripts/lane4.sh start` (or `lane6.sh`) — [`RUN.md`](ac922/RUN.md) |
 | Gate | sha256 manifest → `laneverify.sh` → `alive.py` three probes → determinism (`det_same=true`) |
 | Measure | torch-free `eval/` harness under the paired same-boot protocol — [`METHODOLOGY.md`](ac922/METHODOLOGY.md) |

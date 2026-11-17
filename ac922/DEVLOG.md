@@ -219,6 +219,53 @@ each entry is a *result*, not a diary.
   cross-boot relay cells carry no verdict by design, and a fixture that aborts is not a measurement -
   but a lane is only "ship" when the *graded* gate says so, not when one probe looks odd.
 
+## Phase H — the delivery repo has to build from itself (11-17 evening, cards 4/5 as a dev lane)
+
+Production stayed on the 4-card lane (8091) the whole phase; everything below ran on cards 4/5.
+
+- **`devlane.sh` had no geometry for a different card count.** The base config is written for the
+  shipping lane, and `serve` reads the config's `layer_split` key while the engine gets
+  `--layer-split`: both must carry `len(gpu)-1` numbers, so a 2-card dev boot died with
+  `"layer_split" ... got 3 number(s) for 2 GPUs`. It now recomputes an even split from the native
+  gguf's `block_count` when the shape does not fit (`DEV_LAYER_SPLIT` overrides, `off` drops the
+  split), and reads that key's count instead of the card count for the fit test (`25165d2a3c`).
+- **The first genuine from-repo build found three platform fixes that only existed in the
+  bring-up tree.** `build/CMakeCache.txt` says `CMAKE_HOME_DIRECTORY=/data/work/strata-nvfp4-src`:
+  the delivered repo's `build/` had been configured against the pre-delivery source tree, so the repo
+  had never built itself. A clean tree + clean build dir on this box hit, in order:
+  1. `Cannot find source file: ggml-cpu/arch/powerpc/quants.c` - the vendored ggml ships x86/Arm CPU
+     kernels, but ggml-cpu lists the PowerPC file unconditionally on ppc64le. Committed as AC922's own
+     `added` file (every non-generic `ggml_vec_dot_*` forwarded to its `*_generic` reference impl: the
+     CPU lane here is the expert pool and the quantizers, the experts run through `native_experts`),
+     plus `-U__POWER9_VECTOR__` on the PowerPC `ARCH_FLAGS`, `UPSTREAM.md` edit 4 and the two manifest
+     rows (`a2f280b160`; `tools/check_vendored.py`: ok, 128 files).
+  2. `fatal error: cuda_fp4.h: No such file or directory` - CUDA 12.4 has no FP4 header and
+     `mmq_nvfp4_a44.cu` is Blackwell-only, so the include is now guarded behind
+     `BLACKWELL_MMA_AVAILABLE` (`f6a4a86740`).
+  3. `namespace "std" has no member "is_same_v"`, then ~100 `redefinition of ...` from
+     `/usr/include/c++/8/bits/random.tcc` - nvcc's host compiler defaulted to the system GCC 8.5, which
+     cannot compile the engine's C++20 sources. Pin it: `-DCMAKE_CUDA_HOST_COMPILER=<gcc-toolset-12>`,
+     and in a **fresh** build directory, because the CUDA compiler identification is cached. Verified
+     end to end: `BUILD-EXIT=0`, 0 errors; `BUILD.md`/`README.md` carry the command that did it.
+- **Two experiments live in the bring-up tree and were deliberately NOT shipped**: `STRATA_NUMA_ROLES`
+  (per-role NUMA placement of `experts.bin` blobs, `src/core/expert_source.cpp`) and `STRATA_DEDUP`
+  (same-moment prefix dedup, `serve/server.py`). Neither appears in the shipping lane's environment
+  (its engine has exactly 12 `STRATA_*` variables, listed in `RUN.md`), so their absence changes no
+  behaviour; each has to earn its ticket on its own numbers before it enters the repo.
+- **`STRATA_TOPK_COMPACT` ported** (`b47d275dc3`, build fix `b5900b519f`): `qsa_topk_parity --selftest`
+  PASS with the narrowing off *and* on - identical ids on the continuous / 64-level / equal-score /
+  signed-zero+infinity / NaN / spread-tie rows at 262,144, 300,001 and 524,288 contexts; the micro-bench
+  dispatched kernel is 2.3-2.7x the reference without it and 3.4-3.8x with it. Whether that survives a
+  serving window is the open question (a sister fork measured -10% end to end from the same kernel win).
+- **A 2-card lane cannot serve deep windows on the prod-tuned shape.** With `--resident-budget-gib 16`
+  and `--vram-reserve-mib 832` a 96K prompt died twice: first
+  `ggml-cuda (strata mmq): out of memory: cudaMalloc`, then - after the reserve went to 3072 - the
+  stall watchdog killed a *slow, not stuck* engine: `no progress for 60 s during a request (reading the
+  prompt (batched): layer 12 of the prompt chunk from token 0)`. A dev lane at these depths needs
+  resident experts >= 40 GiB, reserve >= 3072 MiB and `STRATA_WATCHDOG_S` raised (the IO allowance
+  `STRATA_WATCHDOG_IO_S` does not cover it: the reads are page-cache hits, so the file-tier counter
+  that grants it never moves).
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -261,3 +308,8 @@ each entry is a *result*, not a diary.
 11. When a knob's fix is "give the tightest resource more room", move the workload before shrinking
     the cache: two layers off CUDA3 bought the same headroom that reserve 1024 bought by costing
     26% of short-window prefill and a quarter of the draft acceptance.
+12. A delivered repository has to build from a clean checkout of **itself**.  Our shipping `build/`
+    directory had been configured against the pre-delivery source tree, so three platform fixes
+    (ppc64le ggml quants, the CUDA 12.4 FP4 include, the C++20 host compiler) lived only in that tree
+    and nothing noticed.  One clean `cmake` on the target architecture found all three.
+

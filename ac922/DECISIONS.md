@@ -369,3 +369,40 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   `engine started:` banner instead of trusting the recorded offset, and reports
   `WARN the engine has restarted N times inside this lane boot` with the logged cause. Without this,
   a respawned lane passes as healthy.
+
+## Adopted: the build pins gcc-toolset-12 as nvcc's host compiler (2026-11-17)
+
+- **Decision.** The documented build command names the toolset explicitly for C, C++ **and**
+  `-DCMAKE_CUDA_HOST_COMPILER`. `ac922/BUILD.md` carries the exact command verified on this box
+  (`BUILD-EXIT=0`, 0 errors).
+- **Why.** The engine is C++20. nvcc's host compiler otherwise defaults to the box's system GCC 8.5,
+  which dies on the engine's own sources (`namespace "std" has no member "is_same_v"`) and on
+  libstdc++ 8's `<random>` inline variables (~100 `redefinition of ...`). This is not a warning-level
+  difference: the build simply does not exist without the pin.
+- **Trap worth knowing.** `CMAKE_CUDA_HOST_COMPILER` is only honoured when the CUDA compiler
+  identification is (re)computed. A build directory that already saw GCC 8.5 keeps it silently, so the
+  fix looks like it does nothing; use a fresh build directory (or `PATH=/opt/rh/gcc-toolset-12/root/usr/bin:$PATH`
+  before the first configure).
+
+## Archived under the quality red line: `STRATA_HC_Q8` (2026-11-17)
+
+- **What it buys.** Reading the hyper-connection projections as Q8_0 instead of BF16 buys VRAM
+  (~139 expert slots per card in a sister measurement) and ~1.5% decode.
+- **Why it is out.** It is a coarser read of live weights, so it is a quality-for-speed trade by
+  definition: the engine itself warns `answers can differ in near-tie tokens`, and the sister's own
+  numbers put it at KL 0.0003-0.0010 over its noise floor. The standing red line (user) rules out
+  buying speed with output quality, so no GPU hours were spent on an A/B; the flag stays unset.
+- **Audit closure.** The earlier "canonical HC skip may already be active" question is closed: on
+  NVIDIA layer splits it requires `STRATA_HC_Q8=1` explicitly (unset = off outside gfx12/gfx1151), so
+  the shipping lane reads BF16 today.
+
+## Not shipped: the bring-up tree's two experiment patches (2026-11-17)
+
+- **Inventory.** `/data/work/strata-nvfp4-src` (the pre-delivery tree) carries two opt-in patches that
+  the repo does not: `STRATA_NUMA_ROLES` (derive per-role byte sizes for `experts.bin` blobs so NUMA
+  placement can split gate/up/down across nodes) and `STRATA_DEDUP` (same-moment prefix dedup in the
+  server: a follower with a matching long-prompt digest waits for the leader's first token).
+- **Decision: keep them out for now.** Neither is set in the shipping lane's environment, so shipping
+  without them changes no behaviour, and the repo states only mechanisms this box has measured. When
+  either mechanism earns its numbers (the NUMA one belongs with the remote-read remediation, the dedup
+  one with the same-moment-burst work), it lands as its own commit with its own A/B - not as cargo.

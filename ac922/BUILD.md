@@ -6,18 +6,38 @@ Toolchain that produced the final lane (all versions are what the box actually h
 | --- | --- |
 | CPU arch | ppc64le (POWER9, dual socket, 20C SMT4 each) |
 | OS | RHEL8-family (Anolis/EL8 class) |
-| GCC | 8.5.0 |
+| GCC (system) | 8.5.0 — **not** usable as the CUDA host compiler, see below |
+| GCC (build) | 12.2.1 from `gcc-toolset-12` (C, C++ and nvcc's `-ccbin`) |
 | CUDA | 12.4 (`nvcc` reports `cuda_12.4.r12.4`) |
 | CMake | 3.26.5 |
 | Python (server) | 3.11.13 |
-| Engine pin | this checkout, `b08a70078` = strata **0.1.59** (`v0.2.13-nvfp4.1`) |
+| Engine release | strata **0.1.59** (`v0.2.13-nvfp4.1`) + the AC922 commits on top of it (`git log --oneline`) |
 
 ```bash
 cd <repo>
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70
+T=/opt/rh/gcc-toolset-12/root/usr
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 \
+      -DCMAKE_C_COMPILER=$T/bin/cc -DCMAKE_CXX_COMPILER=$T/bin/c++ \
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.4/bin/nvcc \
+      -DCMAKE_CUDA_HOST_COMPILER=$T/bin/c++
 cmake --build build -j"$(nproc)"
 ./build/strata --version          # must print: strata 0.1.59
 ```
+
+This exact command is what builds the shipping lane; it was re-verified on 2026-11-17 from a clean
+tree (`BUILD-EXIT=0`, 0 errors, 176-core box). Two things in it are load-bearing on this platform:
+
+- **the toolset has to be pinned for nvcc too.** The engine is C++20 (`CMAKE_CXX_STANDARD 20`). With
+  the default host compiler, nvcc feeds those sources to the system GCC 8.5 and the build dies
+  (`namespace "std" has no member "is_same_v"`, then ~100 `redefinition of ...` inside
+  `/usr/include/c++/8/bits/random.tcc`, whose inline variables GCC 8 cannot compile at `-std=c++20`).
+  `-DCMAKE_CUDA_HOST_COMPILER` alone is not enough once a build directory exists - the CUDA compiler
+  identification is cached, so a build directory that already saw GCC 8.5 keeps it: configure a fresh
+  build directory (or export `PATH=$T/bin:$PATH` before the first configure).
+- **CUDA 12.4 has no `cuda_fp4.h`.** `src/prefill/mmq_nvfp4_a44.cu` (Blackwell-only W4A4 path) guards
+  that include behind `BLACKWELL_MMA_AVAILABLE`, and the vendored ggml carries `ggml/src/ggml-cpu/arch/powerpc/quants.c`
+  for the same reason (ggml-cpu lists it on ppc64le unconditionally). Both are described in
+  `third_party/strata-ggml/UPSTREAM.md` (edit 4) and `DEVLOG.md`.
 
 Notes specific to this platform:
 
