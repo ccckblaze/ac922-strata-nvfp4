@@ -19,13 +19,29 @@ T=/opt/rh/gcc-toolset-12/root/usr
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 \
       -DCMAKE_C_COMPILER=$T/bin/cc -DCMAKE_CXX_COMPILER=$T/bin/c++ \
       -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.4/bin/nvcc \
-      -DCMAKE_CUDA_HOST_COMPILER=$T/bin/c++
-cmake --build build -j"$(nproc)"
+      -DCMAKE_CUDA_HOST_COMPILER=$T/bin/c++ \
+      -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_TESTS=OFF \
+      -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_Q6K_EXPERTS=ON -DSTRATA_EXPERIMENTAL_SM60=ON \
+      -DSTRATA_MMQ_KQUANTS=ON -DSTRATA_MMQ_TQ_OVERLAY=ON -DSTRATA_AMD_COMMUNITY_TUNING=ON
+cmake --build build -j"$(nproc)"      # production is live: nice -n 19 ionice -c3
 ./build/strata --version          # must print: strata 0.1.59
 ```
 
-This exact command is what builds the shipping lane; it was re-verified on 2026-11-17 from a clean
-tree (`BUILD-EXIT=0`, 0 errors, 176-core box). Two things in it are load-bearing on this platform:
+Seven of those eight `STRATA_*` flags are already `option(... ON)`; they are spelled out because
+`STRATA_EXPERIMENTAL_SM60` is **not** an `option()` - it is a plain variable read by
+`cmake/strata_gpu_engine.cmake:14`, so omitting it silently drops the `STRATA_EXPERIMENTAL_SM60=1`
+compile definition from `strata_core`. The shipping `build/CMakeCache.txt` has it `ON`, and the
+`CUDA_ARCHITECTURES`/flag set above is exactly what the production cache carries (verified key by
+key on 2026-11-17).
+
+This exact command is what builds the shipping lane. It has been re-verified twice on 2026-11-17:
+once from a clean upstream tree (`BUILD-EXIT=0`, 0 errors, 176-core box) and once from this delivery
+tree at `b68aaf6aca` into a separate `build-new/` (`BUILD-EXIT=0`, 0 errors, ~10 min at `-j 64` while
+the 4-card lane stayed live). The switch note in `DEVLOG.md` records why the second one mattered: the
+production `build/` predates this repository - its `CMakeCache.txt` still points at the pre-delivery
+source tree, so nothing in the lane had actually been compiled from the shipped sources until then.
+
+Two things in the command are load-bearing on this platform:
 
 - **the toolset has to be pinned for nvcc too.** The engine is C++20 (`CMAKE_CXX_STANDARD 20`). With
   the default host compiler, nvcc feeds those sources to the system GCC 8.5 and the build dies
@@ -61,10 +77,19 @@ download (see `RUN.md`). What you build is the CPU embedding helper `strata-visi
 the ggml/mtmd stack pinned to this engine's llama.cpp commit:
 
 ```bash
-cmake -B build-vision -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_CURL=OFF
+T=/opt/rh/gcc-toolset-12/root/usr
+cmake -B build-vision -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_CURL=OFF \
+      -DCMAKE_C_COMPILER=$T/bin/cc -DCMAKE_CXX_COMPILER=$T/bin/c++
 cmake --build build-vision -j --target strata-vision
 # must be CPU-only: the process must not hold a CUDA context (vision.gpu=false is the adopted shape)
 ```
+
+The toolset pin is load-bearing here as well, for a different reason than the engine build.
+`ggml-backend-reg.cpp` uses `std::filesystem`, and GCC 8.5 keeps that in a separate `libstdc++fs`:
+configured with the system compiler every compile step passes and only the link fails, with
+`undefined reference to std::filesystem::status(...)` / `... directory_iterator::increment(...)`
+and `collect2: error: ld returned 1 exit status`. GCC 12 folded it into libstdc++, which is what the
+shipping `build-vision` is configured with. Re-verified 2026-11-17.
 
 `-mcpu=power9` is picked automatically by ggml's native detection on this box (it implies VSX —
 an explicit `-mvsx` is redundant, and do not expect POWER10/11 paths: this compiler's autovectorizer

@@ -453,3 +453,24 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   a separate short-window lane serves small requests on its own cards - which is exactly what
   `ac922/scripts/devlane.sh` already is, without pretending to be one server. Adopting `replicas`
   would only be worth its risk if one front door and one config were a hard requirement.
+
+## Adopted: the shipping binary must be built from this repository (2026-11-17 evening)
+
+- **Problem.** The live lane ran `build/strata`, but `build/CMakeCache.txt` records
+  `CMAKE_HOME_DIRECTORY=/data/work/strata-nvfp4-src` - the binary predates the delivery repo, so the
+  published sources had never produced the thing we measure and publish.
+- **Decision.** Build the lane from this tree into a separate directory while the old one keeps
+  serving, then switch by renaming (`build` -> `build.pre-repo`, `build-new` -> `build`), which keeps
+  rollback a second `mv`. Same for `build-vision`.
+- **Verification of the claim before switching.** `CFG-EXIT=0` / `BUILD-EXIT=0` / 0 errors;
+  `strata 0.1.59`; the 10 cache keys that define the engine (`CMAKE_BUILD_TYPE`,
+  `CMAKE_CUDA_ARCHITECTURES`, the seven `STRATA_*` build flags, `STRATA_BUILD_TESTS`) are identical to
+  the production cache; kernel self-checks on a free card pass (`qsa_topk_parity` PASS, `gr_parity` 0
+  failures, `dequant_wide_parity` 360 cases bitwise); `build-vision-new` is CUDA-free with the
+  `Qwen4Exp` mtmd symbols present.
+- **Why the flags are now spelled out in `BUILD.md`.** `STRATA_EXPERIMENTAL_SM60` is read as a plain
+  variable, not declared with `option()`, so a "clean" configure that omits it produces a quieter
+  binary that still builds and still prints 0.1.59 - the worst kind of silent divergence.
+- **Not changed by this decision.** Nothing about geometry, exports, or model assets; the switch is
+  binary provenance only, and it still has to clear the full gate set (`qualgate check`, acc-drift,
+  det x3, 4x full window, GEOMETRY-PASS) before the numbers in `PERFORMANCE.md` stay valid.

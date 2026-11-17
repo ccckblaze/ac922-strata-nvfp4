@@ -298,6 +298,40 @@ independent estimate (+0.8%) and below the 1.5% adoption bar, and it explains wh
 measured +3.5-4%: their selector call shape is not this engine's. Decision in `DECISIONS.md`: keep
 the code and its ctest arm (opt-in, default off), do not put it in the shipping exports.
 
+### H.2 — the delivery tree compiles the shipping lane (11-17 21:15, cards 0-3 live throughout)
+
+Configured `build-new/` from this tree at `b68aaf6aca` with the `BUILD.md` command plus the shipping
+flag set: `CFG-EXIT=0`, `BUILD-EXIT=0`, zero errors, ~10 min at `-j 64` under `nice -n 19 ionice -c3`
+while the 4-card lane kept serving.  `build-new/strata` reports `strata 0.1.59`, 135,598,888 B,
+sha256 `de5c351c0ac5bd5d...`; the binary the live lane is running is `b1f12bb047b79002...`, and the
+two differ for exactly the expected reason - the production cache still names the pre-delivery source
+tree.  `build-new/` is deliberately separate: the live lane's `build/` is never written to while it is
+serving, and it doubles as the rollback copy.
+
+`build-vision-new/` (CPU encoder, same tree) is 8,572,224 B, sha256 `a90dddffd6d7a799...`, `ldd`
+shows no CUDA library, `GGML_CUDA=OFF`, and it carries 41 `Qwen4Exp` mtmd symbols - the multimodal
+path is present in what we ship.
+
+**Two `BUILD.md` gaps, both found by running the documented command rather than reading it.**  The
+vision section never pinned the toolset, so a first-time configure picks system GCC 8.5, every compile
+step passes, and only the link dies on `std::filesystem` (which 8.5 keeps in `libstdc++fs`).  The main
+section omitted the flag set, and one of those flags - `STRATA_EXPERIMENTAL_SM60` - is not an
+`option()`, so omitting it silently drops a compile definition from `strata_core`.  Both are fixed in
+`BUILD.md`; the documented flag set is now the production cache, checked key by key (10 keys, all
+identical between `build/` and `build-new/`).
+
+Kernel self-check for the new binary, on a free card (`CUDA_VISIBLE_DEVICES=5`, no impact on the
+lane): `qsa_topk_parity --selftest` PASS (identical ids across all six row classes at 262,144 /
+300,001 / 524,288), `gr_parity` 0 failures, `dequant_wide_parity` 360 cases bitwise OK.
+
+**Switch pending operator approval.**  Plan: `lane4.sh stop` -> `mv build build.pre-repo && mv
+build-new build` (same for `build-vision`) -> `lane4.sh start` -> `qualgate.sh check` against
+`det = bfd40ecd4692`, `acc-drift-ok`, three `sbench.py det` runs, `fullwindow.py run --n 4 --gen 512
+--total 262144` (8/8 rows at prompt+gen = 262,136 with `finish=length`), `lane4.sh status`
+GEOMETRY-PASS, and exactly one new `engine started:` line.  Rollback is the inverse `mv` plus
+`start`.  Anchors taken before the switch: `/health` 200 with `max_context 262144`, GEOMETRY-PASS on
+cards 0-3, engine log at 36,810,170 B with 418 `engine started:` lines.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id
@@ -349,3 +383,7 @@ the code and its ctest arm (opt-in, default off), do not put it in the shipping 
     experts with swaps every window.  Sorting a decode ticket there ranks boot luck.  It is the right
     place to prove a build compiles, a deep window serves and a kernel is bit-exact; it is the wrong
     place to price a kernel.
+14. A documented build command drifts from the configuration that produced the shipping binary, and
+    the drift is invisible when the flags default ON.  Diff the build cache of the live build directory
+    against a fresh configure key by key, and keep one flag spelled out even when it is the default if
+    it is a plain variable rather than an `option()`.
