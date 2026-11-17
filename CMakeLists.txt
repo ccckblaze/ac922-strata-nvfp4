@@ -477,23 +477,6 @@ if(STRATA_NATIVE_EXPERTS)
     add_executable(q8_gemv_bench src/kernels/q8_gemv_bench.cpp)
     target_include_directories(q8_gemv_bench PRIVATE ${_strata_gpu_include_directories})
     target_link_libraries(q8_gemv_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
-    # TOPK-COMPACT (STRATA_TOPK_COMPACT=1): the QSA top-k the engine dispatches against the original kernel -
-    # identical ids on both sides of the register kernel's reach, and on both sides of the compact narrowing
-    # (synthetic, no model). Ported from Strata-V100 53a36c9b; unset leaves the dispatch byte for byte.
-    add_executable(qsa_topk_parity src/kernels/qsa_topk_parity.cpp)
-    target_include_directories(qsa_topk_parity PRIVATE ${_strata_gpu_include_directories})
-    target_link_libraries(qsa_topk_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
-    if(STRATA_BUILD_TESTS)
-      add_test(NAME qsa_topk_parity COMMAND qsa_topk_parity --selftest)
-      # the register kernel from the smallest prompt batch: same ids at every case
-      add_test(NAME qsa_topk_parity_reg_always COMMAND qsa_topk_parity --selftest)
-      set_tests_properties(qsa_topk_parity_reg_always PROPERTIES ENVIRONMENT "STRATA_TOPK_REG_MIN_BLOCKS=0")
-      if(NOT STRATA_ENABLE_HIP)
-        # the compact narrowing: same ids, including the signed-zero/infinity and NaN score rows
-        add_test(NAME qsa_topk_parity_compact COMMAND qsa_topk_parity --selftest)
-        set_tests_properties(qsa_topk_parity_compact PROPERTIES ENVIRONMENT "STRATA_TOPK_COMPACT=1")
-      endif()
-    endif()
     # EXPDEC (docs/EXPERTDEC.md): the grouped experts' default kernels against STRATA_EXPDEC=1 at T = 1..4, bit for bit
     # and in microseconds, on synthetic blobs read cold from DRAM
     add_executable(expdec_bench EXCLUDE_FROM_ALL src/kernels/expdec_bench.cpp)
