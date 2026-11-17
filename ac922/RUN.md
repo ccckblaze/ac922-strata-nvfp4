@@ -72,7 +72,7 @@ Once the pinned lane holds the 4-card geometry (the shipped default, see step 3 
 
 ```
 bash ac922/scripts/devlane.sh check    # who holds the dev cards, RAM available
-bash ac922/scripts/strata-nvfp4-run.sh start                       # prod lane, 4 cards (default)
+bash ac922/scripts/lane4.sh start      # prod lane, 4 cards (default, geometry-gated)
 bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
 ```
 

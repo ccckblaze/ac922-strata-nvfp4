@@ -276,12 +276,52 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   `check` in the same boot. Result: `det` x3 `bfd40ecd4692` — **bit-identical across the geometry
   switch**, `acc-drift-ok 1.003`, `QUALGATE-PASS`, relay 3/8 (inside the same-config replay noise
   band established today, which is why the rate is reported and never used as the verdict).
-- Numbers (one boot, same harnesses as the 6-card adopted state): single stream tg 77.3@8K,
+- Numbers (first boot, same harnesses as the 6-card adopted state): single stream tg 77.3@8K,
   71.8@54K, 73.0@65K, 69.1@110K, 72.0@165K, 70.0@210K; `aggbench` 8K×4 sum_tg 135.6 (per 33.7),
   245K×4 sum_tg 100.2 (per 24.4); full window 4×261,632+512 all exact at 262,136 with sum_tg 108.1.
-  Against the 4-card pre-adopt baseline that is +35% short-window single stream, +7% at 245K×4,
-  flat at 8K×4 — the short-window aggregate is admission-bound, so residency tickets do not show up
-  there. Full table and the caliber caveats: `PERFORMANCE.md` §6d.
-- Not claimed: the adopted 6-card *aggregate* decode was never re-measured with `aggbench` (the
-  218.2 / 166.4 cells are pre-adopt), and the 6-card lane has no 65K point from today. Both are
-  marked in the chart and in §6d rather than smoothed over.
+  A second 4-card boot plus two 6-card boots later the same day moved the published cells to
+  medians (8K tg 77.3 → 71.7, because the second boot measured 66.1); see the next two sections and
+  `PERFORMANCE.md` §6d for the full table and caliber caveats.
+
+## Closed: the adopted 6-card aggregate gap, and why medians are now the house rule (2026-11-17)
+
+- The two cells left open above are now measured with the same ruler: `aggbench` 8K×6 **240.1**
+  sum_tg (per-stream 39.7, wall 211.6), 245K×6 **135.2** (per 21.4, wall 93.6), true full window
+  6×261,632+512 all exact at 262,136 with sum_tg **136.2** in the second boot (155.0 in the first),
+  plus the missing 6-card 65K single-stream point (tg 80.3). All of it on the adopted config, and
+  the 6-card `det` fixture still hashes `bfd40ecd4692` - adoption is quality-neutral at both
+  geometries.
+- Card-count scaling on the adopted config, same harness: 8K aggregate **+72%** (139.3 → 240.1),
+  245K **+35%** (100.2 → 135.2), full window **+34%** (108.3 → 145.6), single stream only
+  **+10-14%**. The "cards buy streams, not speed" rule now holds on both geometries of the ship
+  state, not just the pre-adopt one.
+- The 166.4 for 245K×6 was never a lost regression: it came from the live-lane harness
+  (`out/waves/baseline_final.json`, `agg_steady`) while `aggbench` is a synthetic burst. Different
+  ruler, different number; §6d states the pair that is comparable (100.2 vs 135.2).
+- **House rule going forward: published numbers are the median of two boots.** A deep-window single
+  run carries ±15-25% boot noise (4-card 8K tg 77.3 then 66.1; 6-card full window 155.0 then 136.2),
+  so a one-boot cell is written as `n=1` in the table rather than quietly promoted to a headline.
+
+## Adopted: `lane.sh` / `lane4.sh` / `lane6.sh` as the geometry entry point (2026-11-17)
+
+- Why the raw launcher was not enough: the repo root carries no `numabind.so`, so calling
+  `ac922/scripts/strata-nvfp4-run.sh start` directly boots a lane **without** `LD_PRELOAD`, which
+  is healthy, answers requests, and is simply not comparable to the ship state. `lane.sh` pins the
+  machine layout (`lane.env`), sets the preload, waits for `/health`, and then proves the geometry
+  before returning; `lane4.sh` / `lane6.sh` are the two one-word entry points.
+- Two verdicts we believed until the machine disproved both, recorded so nobody re-adds them:
+  1. *Read the last `batch (pipelined, N groups of M)` line in the engine log.* The engine log is
+     cumulative across boots, so after a 6-card → 4-card switch the last such line was still the
+     6-card lane's own runtime statistics. The gate now reads this boot only: it records a byte
+     offset at start (`/tmp/strata-nvfp4-lane.state`) and greps the startup marker
+     `STRATA_PIPED_MTP: N pipelined groups of 2 slots` inside that slice.
+  2. *Gate on `FileExpertSource: WARNING: NUMA placement FAILED: this pack has no per-role byte
+     sizes ... (the split runs with remote reads)`.* Every boot prints it, including the anchored
+     ship state - it is a pack-level property (the NVFP4 pack carries no per-role byte sizes), so
+     gating on it fails a correct lane. It is printed as a note; the real placement gates are
+     `LD_PRELOAD` + `CUDA_VISIBLE_DEVICES` read out of `/proc/<pid>/environ`, the split stage count,
+     and one `cpu pool: NUMA pool on` line.
+- Consequence left on the books, not on the critical path: the first-touch warning is real even if
+  it is not a gate defect - expert pages are still read remotely the first time. Closing it needs a
+  full-pack first-touch (or per-role sizes in the pack), which is the pending remote-read ticket,
+  not a lane.sh problem.

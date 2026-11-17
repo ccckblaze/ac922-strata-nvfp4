@@ -13,17 +13,17 @@
 | --- | ---: | ---: |
 | 最大上下文（真实可用） | **262,136 可达**：4 × 261,632 + 512，每路 prompt 全 exact | 6 × 261,632 + 512，每路全 exact |
 | 冷 prefill @ 262K（单流） | 4,964 tok/s（TTFT 52.7 s） | 7,016 tok/s（261,494 阶梯） |
-| 冷 prefill @ 6.8K / 54K | 2,069 / 4,154 | 2,495 / 6,069 |
-| 单流 decode @ 8K | 77.3 tok/s | 84.8 tok/s |
-| 单流 decode @ 210K | 70.0 tok/s | 82.7 tok/s |
-| 满窗并发 | 4 × 262,136 同时活着，聚合 108.1 tok/s（每路 23.7–30.7） | 6 × 262,136 同时活着，聚合 155.0（每路 20.7–32.4） |
-| 短窗并发 @ 8K | 聚合 135.6（每路 33.7） | 聚合 218.2（每路 35.7，定档前） |
-| VRAM 常驻 | 58.6 GiB（逐卡 14.5–14.9） | 87.7 GiB（逐卡约 14.5–15.0） |
-| 主机 RAM 锁页 | 57.65 GiB | 47.7 GiB |
+| 冷 prefill @ 6.8K / 54K | 2,057 / 4,156 | 2,499 / 6,104 |
+| 单流 decode @ 8K | 71.7 tok/s | 82.1 tok/s |
+| 单流 decode @ 210K | 71.2 tok/s | 81.1 tok/s |
+| 满窗并发 | 4 × 262,136 同时活着，聚合 108.3 tok/s（每路 23.7–30.7） | 6 × 262,136 同时活着，聚合 145.6（每路 20.7–32.4） |
+| 短窗并发 @ 8K | 聚合 139.3（每路 34.8） | 聚合 240.1（每路 39.7） |
+| VRAM 常驻 | 58.6 GiB（逐卡 14.5–14.9） | 85.3 GiB（逐卡 14.0–14.8） |
+| 主机 RAM 锁页 | 57.65 GiB | 54.42 GiB |
 
-「出厂定档」一列是 2026-11-17 同一 boot 内以采纳态（learned expert-profile + `--trim-stage-weights`
-+ 批式流水环）实测；标「定档前」的格子是我们手上最好的 6 卡聚合数，采纳后尚未按同一 harness 重测。
-完整口径见 `PERFORMANCE.md` §6d。
+两列都是 2026-11-17 以采纳态（learned expert-profile + `--trim-stage-weights` + 批式流水环）实测，
+口径为**每种几何两次独立 boot 的中位数**——单次深档跑分带 ±15–25% 的 boot 噪声，因此除 §6d 明确标注
+`n=1` 的格子外，本文没有任何数字来自单次 boot。完整口径见 `PERFORMANCE.md` §6d。
 
 精度（全量题库，errors = 0，预算体检干净）：**GSM8K 97.12%**（1,319 题）、
 **MATH500 89.40%**（500 题）、**HumanEval 96.95%**（164 题）。详见 `ACCURACY.md`。
@@ -45,7 +45,9 @@
   —— 17 个文件，校验和见 `results/MODEL-SHA256SUMS.txt`（定版基线前全部验过）。
   多模态另需 `unsloth/Qwen3.8-Flash-Next-GGUF` 中的 `mmproj-F16.gguf`（约 904 MB；
   dense GGUF 本身早已带 `image-text-to-text` 任务声明和 `image_token_id`）。
-- **配置 + 启动器**：`configs/strata-nvfp4-final.json`、`scripts/strata-nvfp4-run.sh`
+- **配置 + 启动器**：`configs/strata-nvfp4-final.json`；`scripts/lane4.sh` / `scripts/lane6.sh`
+  （几何快捷入口，底层是 `scripts/lane.sh`：钉住本机布局、等 health、并用引擎自述行证明几何形状），
+  以及底层的 `scripts/strata-nvfp4-run.sh`
   （已参数化；生产布局记录在 `RUN.md`）。
 - **采纳/否决台账**（每个旋钮带实测增益）：`DECISIONS.md`。
 - **测量纪律**（同 boot 配对 A/B、质量门禁、预算体检）：`METHODOLOGY.md`。

@@ -14,17 +14,18 @@ actually ran; nothing is aspirational.
 | --- | ---: | ---: |
 | Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
 | Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
-| Cold prefill @ 6.8K / 54K | 2,069 / 4,154 | 2,495 / 6,069 |
-| Single-stream decode @ 8K | 77.3 tok/s | 84.8 tok/s |
-| Single-stream decode @ 210K | 70.0 tok/s | 82.7 tok/s |
-| Full-window concurrency | 4 × 262,136 live, agg 108.1 tok/s (23.7–30.7/stream) | 6 × 262,136 live, agg 155.0 (20.7–32.4/stream) |
-| Short-window concurrency @ 8K | agg 135.6 (33.7/stream) | agg 218.2 (35.7/stream, pre-adopt) |
-| VRAM resident | 58.6 GiB (14.5–14.9/card) | 87.7 GiB (≈14.5–15.0/card) |
-| Host RAM pinned | 57.65 GiB | 47.7 GiB |
+| Cold prefill @ 6.8K / 54K | 2,057 / 4,156 | 2,499 / 6,104 |
+| Single-stream decode @ 8K | 71.7 tok/s | 82.1 tok/s |
+| Single-stream decode @ 210K | 71.2 tok/s | 81.1 tok/s |
+| Full-window concurrency | 4 × 262,136 live, agg 108.3 tok/s (23.7–30.7/stream) | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 139.3 (34.8/stream) | agg 240.1 (39.7/stream) |
+| VRAM resident | 58.6 GiB (14.5–14.9/card) | 85.3 GiB (14.0–14.8/card) |
+| Host RAM pinned | 57.65 GiB | 54.42 GiB |
 
-The shipped column is the adopted state measured 2026-11-17 in one boot (`eval/cphase.py` arms,
-`aggbench`, `fullwindow.py`); the *pre-adopt* cell is the best 6-card aggregate we hold and has not
-been re-taken since adoption. Full table with calibers: `PERFORMANCE.md` §6d.
+Both columns are the adopted state measured 2026-11-17 (`eval/cphase.py` arms, `aggbench`,
+`fullwindow.py`) as the **median of two independent boots per geometry** — a single deep-window run
+carries ±15–25% boot noise, so no number here comes from one boot alone unless §6d marks it `n=1`.
+Full table with calibers: `PERFORMANCE.md` §6d.
 
 Accuracy (full suites, errors = 0, budget audit clean): **GSM8K 97.12%** (1,319),
 **MATH500 89.40%** (500), **HumanEval 96.95%** (164). See `ACCURACY.md`.
@@ -48,7 +49,9 @@ Capacity rule that held across every experiment: **N cards ↔ N full-window str
   — 17 files, checksums in `results/MODEL-SHA256SUMS.txt` (all verified before the final baseline).
   Multimodal additionally uses `mmproj-F16.gguf` from `unsloth/Qwen3.8-Flash-Next-GGUF` (~904 MB;
   the dense GGUF already carries the `image-text-to-text` task declaration and `image_token_id`).
-- **Config + launcher**: `configs/strata-nvfp4-final.json`, `scripts/strata-nvfp4-run.sh`
+- **Config + launcher**: `configs/strata-nvfp4-final.json`; `scripts/lane4.sh` / `scripts/lane6.sh`
+  (geometry shortcuts over `scripts/lane.sh`, which pins the machine layout, waits for health and
+  proves the shape from the engine's own lines), low-level `scripts/strata-nvfp4-run.sh`
   (parameterized; production layout documented in `RUN.md`).
 - **Adopted-knob ledger** with measured deltas and rejected tickets: `DECISIONS.md`.
 - **Measurement discipline** (paired same-boot A/B, quality gates, budget audits): `METHODOLOGY.md`.

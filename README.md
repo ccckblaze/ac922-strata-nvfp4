@@ -22,14 +22,15 @@
 | --- | ---: | ---: |
 | Max context, live | **262,136 reachable**: 4 × 261,632 + 512, every stream exact | 6 × 261,632 + 512, every stream exact |
 | Cold prefill @ 262K, single stream | 4,964 tok/s (TTFT 52.7 s) | 7,016 tok/s (261,494 ladder) |
-| Single-stream decode @ 8K / @ 210K | 77.3 / 70.0 tok/s | 84.8 / 82.7 tok/s |
-| Full-window concurrency | 4 × 262,136 live · agg 108.1 (23.7–30.7/stream) | 6 × 262,136 live · agg 155.0 (20.7–32.4/stream) |
-| Short-window concurrency @ 8K | agg 135.6 (33.7/stream) | agg 218.2 (35.7/stream, pre-adopt) |
-| VRAM resident · RAM pinned | 58.6 GiB · 57.65 GiB | 87.7 GiB · 47.7 GiB |
+| Single-stream decode @ 8K / @ 210K | 71.7 / 71.2 tok/s | 82.1 / 81.1 tok/s |
+| Full-window concurrency | 4 × 262,136 live · agg 108.3 (23.7–30.7/stream) | 6 × 262,136 live · agg 145.6 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 139.3 (34.8/stream) | agg 240.1 (39.7/stream) |
+| VRAM resident · RAM pinned | 58.6 GiB · 57.65 GiB | 85.3 GiB · 54.42 GiB |
 
 Rows are the adopted ship state measured 2026-11-17 (`learned expert-profile` +
-`--trim-stage-weights` + the batched pipelined ring); the two cells marked *pre-adopt* are the
-best 6-card aggregate numbers we hold and have not been re-taken since adoption.
+`--trim-stage-weights` + the batched pipelined ring), published as the **median of two independent
+boots per geometry** because a single deep-window run carries ±15–25% boot noise; single-run cells
+are marked `n=1` in `PERFORMANCE.md` §6d.
 
 Accuracy, full suites, errors = 0, budget audit clean: **GSM8K 97.12%** (1,319) · **MATH500 89.40%** (500) · **HumanEval 96.95%** (164)
 
@@ -62,7 +63,7 @@ Capacity rule that survived every experiment: **N cards ↔ N full-window stream
 | Step | Do this |
 | --- | --- |
 | Build | `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 && cmake --build build -j` — [`BUILD.md`](ac922/BUILD.md) |
-| Run | `bash ac922/scripts/strata-nvfp4-run.sh start` — [`RUN.md`](ac922/RUN.md) |
+| Run | `bash ac922/scripts/lane4.sh start` (or `lane6.sh`) — [`RUN.md`](ac922/RUN.md) |
 | Gate | sha256 manifest → `laneverify.sh` → `alive.py` three probes → determinism (`det_same=true`) |
 | Measure | torch-free `eval/` harness under the paired same-boot protocol — [`METHODOLOGY.md`](ac922/METHODOLOGY.md) |
 
@@ -73,7 +74,7 @@ Capacity rule that survived every experiment: **N cards ↔ N full-window stream
 | Cross-stack accuracy is single-column | reference lanes S1/M1 closed under our grading shapes; their *performance* curves are published. Next: re-anchor vs official model (`eval/ref_run.py`, needs one API key) |
 | AIME / ceval | sample-level only (full suites stopped); queued |
 | GPQA / IFBench / LiveCodeBench-v6 / ToolEval | graders built and gated green; GPU runs queued |
-| Vision suites | blocked by the pack export (no vision tower), not by code |
+| Vision suites | image input shipped (CPU FP32 tower, on by default); RealWorldQA / MathVision / CharXiv grading is queued GPU work |
 | Upstream drift | 167 commits after our pin; policy is whole-version bumps only, backlog in [`DEVLOG.md`](ac922/DEVLOG.md) |
 
 ---

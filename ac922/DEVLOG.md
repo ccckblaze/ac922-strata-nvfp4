@@ -175,10 +175,25 @@ each entry is a *result*, not a diary.
   environment variables; the launcher now derives the batch pair and `NB_CUT` from the card count.
   Re-anchoring the quality reference per geometry, `det` came back bit-identical across the switch
   (`bfd40ecd4692`) — the cold path does not see residency, which is exactly why it is the anchor.
-- 4-card adopted state: single stream 77.3@8K / 70.0@210K, `aggbench` 8K×4 135.6 and 245K×4 100.2,
-  4×261,632+512 all exact at the true ceiling with `sum_tg` 108.1, VRAM 58.6 GiB, RAM pinned 57.65.
-  Honest gap kept in the open: the adopted 6-card aggregate was never re-taken with `aggbench`, and
-  short-window aggregate did not move with the residency tickets (+1.5%) — it is admission-bound.
+- 4-card adopted state (first boot): single stream 77.3@8K / 70.0@210K, `aggbench` 8K×4 135.6 and
+  245K×4 100.2, 4×261,632+512 all exact at the true ceiling with `sum_tg` 108.1, VRAM 58.6 GiB, RAM
+  pinned 57.65. The honest gap that came with it — adopted 6-card aggregates never re-taken — is now
+  closed: second boots on both geometries gave 6-card 8K×6 **240.1**, 245K×6 **135.2**, full window
+  **136.2** (first boot 155.0), plus a 6-card 65K point (80.3), all `det`-identical at `bfd40ecd4692`.
+- **Publishing rule changed as a result of those four boots: headline numbers are medians over two
+  boots, single-boot cells are marked `n=1`.** The reason is mechanical, not stylistic — the same
+  adopted config measured 77.3 and 66.1 at 4-card 8K tg, and 155.0 and 136.2 at 6-card full window,
+  i.e. ±15-25% boot noise on deep runs. Promoting one boot into a README row was how we shipped a
+  number we could not reproduce.
+- Geometry is no longer something the operator remembers: `scripts/lane.sh` + `lane4.sh` / `lane6.sh`
+  pin the machine layout, set `LD_PRELOAD=numabind.so`, wait for health and print `GEOMETRY-PASS`
+  only after checking *this* boot's startup marker, the split stage count and the live engine's
+  `/proc/<pid>/environ`. Two of our own gates died on the machine on the way there (the cumulative
+  engine log made a "last batch line" check read the previous lane's statistics; the pack's
+  first-touch `NUMA placement FAILED` line appears on every boot including the anchored one, so it is
+  a note, not a gate) — recorded in `DECISIONS.md` so they are not re-added.
+- Short-window aggregate did not move with the residency tickets (4-card +4%, inside the boot band) —
+  it is admission-bound, so those tickets show up in single-stream and deep-window cells instead.
 
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 

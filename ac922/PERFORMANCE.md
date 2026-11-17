@@ -224,26 +224,42 @@ deep-window single runs carry +/-15-25% boot noise, so the table reads family me
 The CC 96 -> 48 prediction from the previous draft is closed in 6b; no open items remain in this
 section.
 
-### 6d. The shipped geometry is 4-card (2026-11-17, adopted config, one boot)
+### 6d. The shipped geometry is 4-card (2026-11-17, adopted config, two boots per geometry)
 
 Cards 4/5 go back to the dev/iteration lane, so the ship state is the 4-card shape: `gpu [0,1,2,3]`,
 `--batch 4 --batch-groups 2` (the launcher now derives that pair and `NB_CUT=0.69` from the card
-count, so `start` with no env is the production command). Everything below is one boot of the
-adopted config, measured with the same harnesses as 6c so the two geometries are directly
-comparable.
+count, so `bash ac922/scripts/lane4.sh start` is the production command).  Both geometries were then
+measured with the same harnesses on the adopted config — 4-card boots at 13:51 and 15:11
+(`note_c17/4CARD.*`, `4CARD2.*`), 6-card boots at 13:00 and 14:41 (`ADOPT.*`, `6CARD2.*`) — and the
+published cells are **medians of the two boots**, because a deep-window single run carries ±15-25%
+boot noise (4-card 8K tg measured 77.3 then 66.1; 6-card full window 155.0 then 136.2).  Cells with
+one boot only are marked `n=1`.
 
-| Item | 4-card adopted | 6-card adopted (6c) | 4-card before (B4) |
+| Item | 4-card adopted | 6-card adopted | 4-card before (B4) |
 | --- | ---: | ---: | ---: |
-| tg 8K single stream | **77.3** | 84.8 | 57.1 |
-| tg 54K / 110K / 165K / 210K | 71.8 / 69.1 / 72.0 / 70.0 | 76.0 / 77.8 / 82.2 / 82.7 | 64.8 / — / — / — |
-| tg 65K single stream | 73.0 | not measured | 62.4 |
-| cold pp 54K / 110K / 210K | 4,154 / 4,158 / 3,704 | 6,069 / 6,004 / 5,431 | 3,970 / 4,162 / — |
-| 8K x 4 aggregate (`aggbench`) | **135.6** sum_tg, wall_tg 110.3, per-stream 33.7 | (6 x 8K 218.2, pre-adopt) | 133.6 |
-| 245K x 4 aggregate (`aggbench`) | **100.2** sum_tg, wall_tg 77.8, per-stream 24.4 | (6 x 245K 166.4, pre-adopt) | 93.5 |
-| full window 4 x 261,632 + 512 | **all exact**, prompt+gen 262,136, span 22.6 s, sum_tg **108.1**, per-stream 23.7-30.7 | 6 x exact, sum_tg 155.0 | not measured at the true ceiling |
-| cold 262K prefill, single stream | ttft 52.7 s (pp ~4,964) | — | — |
-| warm 262K decode, single stream | 55.9 tok/s (EOS after 456) | — | — |
-| VRAM / RAM | 14.6/14.5/14.5/14.9 GiB, Σ 58.6 · resident pinned 57.65 GiB | 87.7 GiB Σ · 47.7 pinned | 58.6 GiB Σ · 47.7 pinned |
+| tg 8K single stream | **71.7** (n=2) | 82.1 (n=2) | 57.1 |
+| tg 54K / 110K / 165K / 210K | 71.6 / 70.1 / 73.3 / 71.2 (n=2) | 76.4 / 76.1 / 77.9 / 81.1 (n=2) | 64.8 / — / — / — |
+| tg 65K single stream | 73.0 (n=1) | 80.3 (n=1) | 62.4 |
+| cold pp 54K / 110K / 210K | 4,156 / 4,175 / 3,707 | 6,104 / 6,047 / 5,441 | 3,970 / 4,162 / — |
+| 8K × N aggregate (`aggbench`) | **139.3** sum_tg, per-stream 34.8 (n=2) | 240.1 sum_tg, per-stream 39.7 (n=1) | 133.6 |
+| 245K × N aggregate (`aggbench`) | **100.2** sum_tg, wall_tg 77.8, per 24.4 (n=1) | 135.2 sum_tg, wall_tg 93.6, per 21.4 (n=1) | 93.5 |
+| full window N × 261,632 + 512 | **all exact** at 262,136, sum_tg **108.3** (108.1 / 108.5), span 22.6-23.0 s | all exact at 262,136, sum_tg 145.6 (155.0 / 136.2), span 26.3-32.9 s | not measured at the true ceiling |
+| cold 262K prefill, single stream | ttft 52.7 s (pp ~4,964) (n=1) | — | — |
+| warm 262K decode, single stream | 55.9 tok/s (EOS after 456) (n=1) | — | — |
+| VRAM / RAM | 14.6/14.5/14.5/14.9 GiB, Σ 58.6 · resident pinned 57.65 GiB | 14.5/14.0×4/14.8 GiB, Σ 85.3 · resident pinned 54.42 GiB | 58.6 GiB Σ · 47.7 pinned |
+
+- Scaling, same harness, same day: 8K aggregate **+72%** for two more cards (139.3 → 240.1),
+  245K **+35%** (100.2 → 135.2), true full window **+34%** (108.3 → 145.6).  Single stream moves
+  ~10-14% — the card-count rule buys *streams*, not *speed*, and that now holds on both geometries
+  of the adopted config rather than only on the pre-adopt one.
+- What adoption bought per geometry: 6-card 8K×6 aggregate 218.2 → 240.1 (**+10%**), 4-card 8K×4
+  133.6 → 139.3 (**+4%, inside the boot band**).  Short-window aggregate is admission-bound, so the
+  residency tickets show up in single-stream and deep-window cells, not here.
+- The 6-card deep aggregate needs one honest note: `aggbench` 245K×6 measures 135.2 sum_tg while the
+  pre-adopt archive cell says 166.4 — but that cell came from the live-lane harness
+  (`out/waves/baseline_final.json`, `agg_steady`/`agg_total` on production traffic), not from this
+  synthetic burst, so the two are not the same ruler.  The same-boot, same-ruler pair is
+  4-card 100.2 vs 6-card 135.2, and the full-window row above is measured identically on both.
 
 - Shape evidence: `batch (pipelined, 2 groups of 2)`, `rows_per_step 3.35`, `STRATA_PIPED_MTP`
   drafting one MTP proposal per slot per window - the 4-card geometry runs the same batched ring,
@@ -252,11 +268,14 @@ comparable.
   switch** (the det fixture does not see residency), gate `QUALGATE-PASS` with acc-drift 1.003
   against a freshly written 4-card `REF.json`; the 6-card anchor is preserved beside it as
   `REF-6card-adopted-20261117.json`.
-- What the tickets bought at 4 cards: short-window single stream +35% (57.1 → 77.3), deep single
-  stream +8-11% over B4, 245K x 4 aggregate +7%, 8K x 4 aggregate flat (+1.5%) - concurrency at
-  short windows is admission-bound, not residency-bound, which is why the same +35% does not appear
-  in the aggregate column.
-- Honest gap: the adopted 6-card *aggregate* was never re-measured with `aggbench`, so the 218.2 /
-  166.4 cells above are pre-adopt. Reading 4-card adopted against them understates the 6-card ship
-  state; the comparison that is fully same-day and same-harness is the single-stream ladder and the
-  true-ceiling full-window row.
+- What the tickets bought at 4 cards (two-boot medians): short-window single stream 57.1 → 71.7
+  (**+26%**), deep single stream +8-11% over B4, 245K × 4 aggregate +7%, 8K × 4 aggregate +4% -
+  concurrency at short windows is admission-bound, not residency-bound, which is why the single-stream
+  gain does not appear in the aggregate column.
+- Geometry is now machine-checked rather than remembered: every boot above ended with
+  `lane.sh` printing `GEOMETRY-PASS` (pipelined group shape from the startup marker, stage count
+  from the split summary, `LD_PRELOAD=numabind.so` and `CUDA_VISIBLE_DEVICES` read out of the live
+  engine's `/proc` environ, one `cpu pool: NUMA pool on` line).
+- Remaining thin cells (`n=1`): the 65K single-stream points on both geometries, both `aggbench`
+  245K cells, the 6-card 8K×6 aggregate, and the cold/warm 262K single-stream pair (4-card only).
+  They are marked in the table; closing them is a repeat of the same harness, not new methodology.

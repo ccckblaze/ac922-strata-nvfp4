@@ -40,8 +40,11 @@ All full-suite readings below have **errors = 0** and passed the budget audit.
 - **GPQA-Diamond / IFBench / LiveCodeBench-v6 / ToolEval**: graders, fixtures and self-tests are
   green (including grader parity against official fixtures, residual 5/344 traced to upstream
   fixture drift and documented); GPU runs are queued.
-- **Vision suites** (RealWorldQA / MathVision / CharXiv): blocked by the model export — the
-  NVFP4 repo has no vision tower (`mmproj*` absent), not a code gap.
+- **Vision suites** (RealWorldQA / MathVision / CharXiv): still queued, and the earlier reason is
+  withdrawn — the tower exists (`mmproj-F16.gguf`, ~904 MB, in `unsloth/Qwen3.8-Flash-Next-GGUF`),
+  so image input itself is shipped and on by default (CPU FP32 `strata-vision`; reference-image
+  round trip 2-4 s). What has not been run is the graded *suites*, which are GPU-queue work, not a
+  missing asset.
 
 ## Quality gates the lane passes today
 
