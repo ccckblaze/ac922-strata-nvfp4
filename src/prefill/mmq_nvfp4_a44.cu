@@ -11,7 +11,9 @@
 // prompt path's activation buffers are unchanged. Built for 12xa only, as mmq_nvfp4_w4a4.cu.
 #include "common.cuh"
 
+#if defined(BLACKWELL_MMA_AVAILABLE)   // AC922: CUDA 12.4 has no cuda_fp4.h; FP4 device code is Blackwell-guarded
 #include <cuda_fp4.h>
+#endif
 
 #define STRATA_MMQ_Y2 1
 #define STRATA_MMQ_XPTR 1
