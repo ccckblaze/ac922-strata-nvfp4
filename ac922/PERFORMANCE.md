@@ -122,6 +122,34 @@ product** (≈61% of window time), GPU-reach wait ≈28%, host CPU ≈12%. Conse
 Question: does the "one full-window stream per card" rule actually hold at 6 cards?
 Answer: **yes, and the wall is VRAM per card, not RAM.**
 
+### 6a. What "full window" means here, to the token
+
+`--max-context 262144` is the *configured* window; **the addressable ceiling is 262,136**, eight
+slots short, because the engine keeps the MTP draft window (`--spec 6` plus slack) out of reach. Two
+independent measurements bite together (`ac922/eval/maxwin.py`):
+
+- a request at prompt 262,136 with `max_tokens 1` is refused - the 400 body quotes both numbers
+  (`262136`, `262144`), and prompt 262,134 is the largest prompt accepted;
+- six concurrent streams at prompt 261,707 asked for `gen 437` were cut at `ctok 429`, five of six
+  of them landing on position 261,707 + 429 = **262,136** with `finish_reason=length`.
+
+Corollaries worth pinning: the engine enforces `prompt_tokens + max_tokens <= 262144` (so exactness
+is a property of the **sum**, not of hitting a round prompt), and it will not write past 262,136 -
+so a client computing `max_tokens = 262144 - prompt` gets a 400 on the last eight tokens. Use
+262,136 as the window end. The filler lesson behind all this: `" 1"` is not one token - it measures
+**+2.05 tokens per copy** (+11 for 5, +41 for 20), which is why `maxwin.py` reads the engine's own
+`usage.prompt_tokens` as truth and bisects a monotone knob instead of counting tokens itself.
+
+**Measured at the true ceiling, 6 concurrent independent streams**
+
+| arm | prompt (verified per stream) | gen to ceiling | reached 262,136 | sum_tg | per-stream tg |
+| --- | ---: | ---: | ---: | ---: | --- |
+| ARM-A | 261,707 | (437 asked, reserve overshoot) | 5/6 cut at 262,136 | 118.9 | 12.8-28.8 |
+| **ARM-A2** | **261,275** | **861** | **2/6 at 262,136, 4 by model EOS** | **148.5** | **18.1-31.7 (med 23.3)** |
+
+Four of six ending before the ceiling is the model choosing `finish_reason=stop` at temperature 0,
+not the lane falling short - ARM-A shows five streams being held at exactly 262,136 at the same time.
+
 Ship geometry (`--batch 6 --batch-groups 3`, `--kv int8`, `--kv-resident 32768`,
 `--max-context 262144`, warm prefix), 6 independent streams (start-of-prompt marker makes every
 prefix distinct, so no cross-stream sharing), temperature 0:
