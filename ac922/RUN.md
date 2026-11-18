@@ -153,8 +153,25 @@ before taking a baseline.
 ```bash
 cd /data/work/ac922-strata-nvfp4
 CARDS=4 python3.11 ac922/eval/laneaudit.py            # the current boot
+CARDS=4 SINCE=delta python3.11 ac922/eval/laneaudit.py    # only the traffic since the last audit
 CARDS=6 SINCE=200000 python3.11 ac922/eval/laneaudit.py   # or a trailing slice
 ```
+
+`SINCE=delta` is the shape for a switch back: it audits the lines nobody has audited yet, then moves
+the watermark (`/data/work/laneaudit.watermark`, override with `WM=`) to end-of-log, so the next
+switch back starts exactly where this one stopped.  Seed it once from a boot audit:
+
+```bash
+wc -l < /data/champion/strata-nvfp4-engine.log > /data/work/laneaudit.watermark
+CARDS=4 SINCE=delta python3.11 ac922/eval/laneaudit.py
+```
+
+Verdicts are `PASS` / `WARN` / `FAIL` / `THIN`.  `THIN` means the sweep was clean but the window held
+fewer than five requests, which is not evidence about rates -- audit again after more traffic, or
+fall back to `SINCE=boot`.  A green lane must always mean "green over traffic", never "green over
+nothing".  In a line-window scope `engine-respawn` counts the `engine started:` lines inside the
+window: zero is expected, one means the lane restarted while you were away (WARN, check why), two
+means it did it more than once (FAIL).
 
 Read-only: it parses the engine's own per-request telemetry block (prompt/reused/read with pp and tg,
 resident RAM and blob reads, expert and KV tier hit rates, the file-tier line, conversation-cache
@@ -175,4 +192,4 @@ What each family means, and the verdicts we have actually earned:
 | `eviction shape` | is residency saturated | WARN when every eviction lands on the deepest parked level; averaged eviction counts hid this once (98.5% on one level named the knob) |
 | `prefill chunking` | how varied the deep-prefill chunk geometry is | informational WARN: chunk size depends on live slots, and that is the mechanism behind the deep-window hash instability in `DEVLOG.md` H.3 |
 | `mtp acceptance`, `cc restore live/ckpt` | are the mechanisms we paid for still armed | acceptance >= 0.55 (adopted ~0.72-0.74); live restores should dominate checkpoint rebuilds |
-| `engine-respawn`, `fatal-signatures` | did the engine die and get reborn under a green `/health` | one `engine started:` line per boot, zero death strings |
+| `engine-respawn`, `fatal-signatures` | did the engine die and get reborn under a green `/health` | one `engine started:` line per boot (zero restarts inside a delta window), zero death strings |

@@ -18,7 +18,13 @@ Prints integers, ratios, band labels and PASS/WARN/FAIL -- never model or prompt
 
 env: ENG engine log (default /data/champion/strata-nvfp4-engine.log)
      CARDS 4|6 lane card count (default 4)
-     SINCE boot|<lines> scope: the current boot (default) or N trailing lines
+     SINCE boot|delta|<lines> scope: the current boot (default), everything since the last
+           audit watermark, or N trailing lines
+     WM   watermark file for SINCE=delta (default /data/work/laneaudit.watermark).  `delta` audits
+          only the traffic nobody has audited yet and then moves the watermark to end-of-log, so a
+          switch back from production reads the new traffic instead of re-reading history.  Rate
+          bands with too few samples are skipped, so an audit right after a quiet stretch prints
+          fewer lines rather than inventing a verdict.
      GEN_MIN ignore decode samples with fewer generated tokens than this (default 32)
 """
 import os, re, statistics
@@ -27,6 +33,7 @@ ENG = os.environ.get("ENG", "/data/champion/strata-nvfp4-engine.log")
 CARDS = int(os.environ.get("CARDS", "4"))
 SINCE = os.environ.get("SINCE", "boot")
 GEN_MIN = int(os.environ.get("GEN_MIN", "32"))
+WM = os.environ.get("WM", "/data/work/laneaudit.watermark")
 
 BANDS = [(0, 16000, "b1<16K"), (16000, 80000, "b2 16-80K"), (80000, 165000, "b3 80-165K"),
          (165000, 240000, "b4 165-240K"), (240000, 1 << 40, "b5>=240K")]
@@ -62,9 +69,17 @@ def scope():
         idx = [i for i, l in enumerate(txt) if "engine started:" in l]
         if not idx:
             raise SystemExit("LANEAUDIT-ERROR no `engine started:` line in %s" % ENG)
-        return txt[idx[-1]:], boots_all, "current boot"
+        return txt[idx[-1]:], boots_all, "current boot", len(txt)
+    if SINCE == "delta":
+        try:
+            mark = int(open(WM).read().split()[0])
+        except Exception:
+            raise SystemExit("LANEAUDIT-ERROR no watermark at %s - seed it with the current log "
+                             "line count, or audit SINCE=boot first" % WM)
+        mark = max(0, min(mark, len(txt)))
+        return txt[mark:], boots_all, "since line %d" % mark, len(txt)
     n = int(SINCE)
-    return txt[-n:], sum(1 for l in txt if "engine started:" in l), "last %d lines" % n
+    return txt[-n:], boots_all, "last %d lines" % n, len(txt)
 
 
 def p90(xs):
@@ -82,7 +97,7 @@ def med(xs):
 
 
 def main():
-    ln, boots_all, what = scope()
+    ln, boots_all, what, total = scope()
     fails, warns, out = [], [], []
 
     def note(name, value, verdict, detail=""):
@@ -170,9 +185,17 @@ def main():
         if r["cold"] and r["pp"] is not None and r["ptok"] > 4000:
             pp_by.setdefault(b, []).append(r["pp"])
 
-    print("scope=%s | requests=%d | boots_in_log=%d | cards=%d" % (what, len(reqs), boots_all, CARDS))
-    note("engine-respawn", "boots_in_boot=1" if SINCE == "boot" else "n/a",
-         "PASS" if SINCE == "boot" else "SKIP", "engine started: lines inside one boot")
+    print("scope=%s | requests=%d | boots_in_log=%d | cards=%d%s"
+          % (what, len(reqs), boots_all, CARDS,
+             "" if SINCE != "delta" else " | watermark=%d->%d" % (int(what.split()[2]), total)))
+    boots_here = sum(1 for l in ln if "engine started:" in l)
+    if SINCE == "boot":
+        note("engine-respawn", "boots_in_boot=1", "PASS", "engine started: lines inside one boot")
+    else:
+        note("engine-respawn", "restarts=%d" % boots_here,
+             "PASS" if boots_here == 0 else ("WARN" if boots_here == 1 else "FAIL"),
+             "engine started: lines in the window - 0 is expected, a lane nobody restarted does not "
+             "respawn itself")
     nf = sum(fatal_hits.values())
     note("fatal-signatures", str(nf), "FAIL" if nf else "PASS",
          ",".join("%s=%d" % (k, v) for k, v in fatal_hits.items() if v) or "none of the death strings")
@@ -255,10 +278,20 @@ def main():
 
     print("\n".join(out))
     print("\nchecks=%d" % len(out))
+    if SINCE == "delta":
+        try:
+            open(WM, "w").write("%d\n" % total)
+            print("watermark-moved %s -> %d" % (WM, total))
+        except Exception as exc:
+            print("watermark-NOT-moved %s (%s) - rerun the same scope after fixing it" % (WM, exc))
     if fails:
         print("LANEAUDIT-FAIL fails=%d warns=%d :: %s" % (len(fails), len(warns), ",".join(fails)))
     elif warns:
         print("LANEAUDIT-WARN fails=0 warns=%d :: %s" % (len(warns), ",".join(warns)))
+    elif len(reqs) < 5 and SINCE != "boot":
+        print("LANEAUDIT-THIN fails=0 warns=0 requests=%d - a clean sweep over too little new "
+              "traffic to judge rates; audit again after more traffic, or SINCE=boot for the whole "
+              "lane" % len(reqs))
     else:
         print("LANEAUDIT-PASS fails=0 warns=0")
 

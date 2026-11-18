@@ -415,6 +415,25 @@ major faults; deep prefill chunking varied over 24 sizes with the smallest at 2,
 under 8,192 - that is the cold/cached asymmetry behind the deep-window hash instability; and one
 boot line noting low VRAM on the tightest card.
 
+### H.5 — the audit learns to read only what is new (11-18 09:3x)
+
+A boot-scoped audit re-reads everything, so a second switch back on the same boot mostly re-judges
+traffic it already judged, and the newest traffic - the part actually at risk - is diluted by history.
+`SINCE=delta` now audits the lines since the last audit and moves a watermark to end-of-log
+(`WM=` to relocate), and a line-window scope counts `engine started:` lines inside the window:
+0 restarts PASS, 1 means the lane restarted while nobody was watching (WARN), 2+ FAIL.
+
+Second guard, against a specific kind of false comfort: a clean sweep over an empty window used to
+print `LANEAUDIT-PASS`.  Under a delta scope, fewer than five requests now prints **`THIN`** - a clean
+sweep is not evidence about rates.  A green lane has to mean green over traffic.
+
+Re-audit of the same boot, same day, 1,417 requests (15 more than H.4): still **0 FAIL / 4 WARN**, the
+same four names, and the mechanism numbers unmoved - ring 1.84 rows/group-step, MTP acceptance 0.720,
+expert hit median 96.1% / p10 90.0%, blob reads 0, resident RAM a single 57.10 GiB, reuse share 0.96,
+restores 339 live / 41 checkpoint.  Decode band p90 ratios 1.06 / 1.04 / 0.93 / 0.92 / 0.88 identical
+to H.4, and the inversion check still clean at 1.19.  That stability is the point of running it on
+every switch back: it is what lets a later WARN be read as a change rather than as noise.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - Monster 6-card per-card VRAM + same-moment host RAM: one 6-card boot, ~20 min, sampling only.
