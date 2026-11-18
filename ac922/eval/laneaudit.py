@@ -19,7 +19,6 @@ Prints integers, ratios, band labels and PASS/WARN/FAIL -- never model or prompt
 env: ENG engine log (default /data/champion/strata-nvfp4-engine.log)
      CARDS 4|6 lane card count (default 4)
      SINCE boot|<lines> scope: the current boot (default) or N trailing lines
-     SLOT_MAX conversations the conversation cache can hold (default 16)
      GEN_MIN ignore decode samples with fewer generated tokens than this (default 32)
 """
 import os, re, statistics
@@ -27,7 +26,6 @@ import os, re, statistics
 ENG = os.environ.get("ENG", "/data/champion/strata-nvfp4-engine.log")
 CARDS = int(os.environ.get("CARDS", "4"))
 SINCE = os.environ.get("SINCE", "boot")
-SLOT_MAX = int(os.environ.get("SLOT_MAX", "16"))
 GEN_MIN = int(os.environ.get("GEN_MIN", "32"))
 
 BANDS = [(0, 16000, "b1<16K"), (16000, 80000, "b2 16-80K"), (80000, 165000, "b3 80-165K"),
@@ -96,6 +94,8 @@ def main():
 
     reqs, hits, kvs, resident, ring, chunks = [], [], [], [], [], {}
     file_dirty = 0
+    file_mb = 0.0
+    file_faults = 0
     blob_reads = 0
     restored = {"live": 0, "checkpoint": 0}
     evict_by_parked, fatal_hits = {}, {k: 0 for k in FATAL}
@@ -132,8 +132,11 @@ def main():
             kvs.append(float(m.group(1)))
             continue
         m = R_FILE.search(l)
-        if m and (float(m.group(1)) > 0.0 or int(m.group(2)) > 0):
-            file_dirty += 1
+        if m:
+            file_mb += float(m.group(1))
+            file_faults += int(m.group(2))
+            if float(m.group(1)) > 0.0 or int(m.group(2)) > 0:
+                file_dirty += 1
             continue
         m = R_PARK.search(l)
         if m:
@@ -221,8 +224,9 @@ def main():
              "med %.1f%% n=%d (low = host-wait pressure)" % (statistics.median(kvs), len(kvs)))
     note("expert blob reads", str(blob_reads), "FAIL" if blob_reads else "PASS",
          "non-zero means the RAM tier missed to storage")
-    note("storage reads/request", str(file_dirty), "WARN" if file_dirty else "PASS",
-         "requests whose file-tier line reported MB read or major faults")
+    note("storage reads", "%d req" % file_dirty, "WARN" if file_dirty else "PASS",
+         "%.1f MB read from storage, %d major faults over the scope (experts outside the RAM tier; "
+         "the page cache should absorb this)" % (file_mb, file_faults))
     if resident:
         vals = sorted(resident)
         note("resident RAM mode", "%.2f GiB" % statistics.median(resident), "PASS",
@@ -233,12 +237,13 @@ def main():
          "live rows replay a parked conversation, checkpoint rows rebuild one")
     if evict_by_parked:
         tot = sum(evict_by_parked.values())
+        cap = max(evict_by_parked, key=lambda k: int(k))
         pk, ev = max(evict_by_parked.items(), key=lambda kv: kv[1])
         share = ev / tot
         note("eviction shape", "parked=%s %.0f%%" % (pk, 100 * share),
-             "WARN" if (share >= 0.9 and pk == str(SLOT_MAX)) else "PASS",
-             "evictions=%d across %d parked levels (all on the cap = residency saturation)"
-             % (tot, len(evict_by_parked)))
+             "WARN" if (share >= 0.9 and int(pk) >= int(cap)) else "PASS",
+             "evictions=%d over %d parked levels, deepest seen parked=%s (everything landing on the "
+             "deepest level = residency saturation)" % (tot, len(evict_by_parked), cap))
     if chunks:
         deep = sum(v for k, v in chunks.items() if int(k) < 8192)
         note("prefill chunking", "sizes=%d" % len(chunks), "WARN" if deep else "PASS",

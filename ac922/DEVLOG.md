@@ -394,6 +394,34 @@ client sat between my rounds.  This is the same family as the cold/cached asymme
 (`--prefill-pipe` x `STRATA_SPLIT_PF_RES`) is meant to close.  Consequence for every table we publish:
 deep-window numbers are **rate** evidence only; determinism claims stay anchored to the 10K fixture.
 
+### H.4 — the lane audit becomes standing practice (11-18 daytime, operator on the box)
+
+`eval/laneaudit.py`: whenever work switches back from the production lane, audit the boot that just
+served before taking any baseline.  It is log analysis only - the engine already writes a telemetry
+block per request - so it costs no GPU, sends no request and prints no model text; it exits non-zero
+on FAIL so it can gate a switch.  `RUN.md` now documents what each check means.
+
+First run over the boot that served the day (1,374 requests since the 22:53 boot): 24 checks,
+**0 FAIL, 4 WARN**.  Rates held: decode p90 against the adopted anchors 1.06 / 1.04 / 0.93 / 0.92 /
+0.88 across the five window bands, cold prefill 0.81-1.27, `short-vs-deep` inversion check clean
+(64.5 vs 54.0 = 1.19), MTP acceptance 0.720, batch ring at **1.84 rows per group-step** (windows
+really do carry more than one row, so the shared expert read is happening), expert hit rate median
+96.2% / p10 90.1%, **expert blob reads 0**, resident RAM a single value 57.10 GiB over 1,374
+reports, prefix reuse on 96% of requests, live-vs-checkpoint restores 302/40.
+
+The four WARNs are all known attack surfaces, not regressions: KV VRAM hit p10 53.4% (median 67.0)
+is the host-wait pressure still on the backlog; 126 requests touched storage through the OS with
+major faults; deep prefill chunking varied over 24 sizes with the smallest at 2,304 and 93 requests
+under 8,192 - that is the cold/cached asymmetry behind the deep-window hash instability; and one
+boot line noting low VRAM on the tightest card.
+
+## Deferred to an evening window (operator uses the box by day)
+
+- Monster 6-card per-card VRAM + same-moment host RAM: one 6-card boot, ~20 min, sampling only.
+- S1 int8 deep-window tg on a natural long corpus: 4 cards, ~30 min; would replace the hollow
+  archive points in chart panel 2 with comparable-caliber numbers.
+- Monster 4/6-card deeper concurrency cells (32K x 4 and above): same window, free alongside the above.
+
 ## Upstream backlog (for the next whole-version bump; policy: bump, never cherry-pick)
 
 - Engine main has **167 commits** after our pin (`b08a70078`). Must-verify on bump: MMQ row-id

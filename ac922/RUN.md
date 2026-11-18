@@ -141,3 +141,38 @@ geometry means re-anchoring (`qualgate.sh baseline`) after a warm-up round, then
 same boot that the det hashes still equal the other geometry's — the det fixture is bitwise across
 geometries (measured 2026-11-17: 4-card and 6-card both `bfd40ecd4692`), so a det change is a real
 numeric regression, while relay-cell agreement against a cross-geometry REF has no verdict power.
+
+## Switching back from production: audit the lane before trusting the next measurement
+
+The lane serves real traffic while you are not looking.  A `/health` 200 and a green geometry check
+say nothing about whether it kept its **rates** or its **mechanisms**, and every campaign in this
+repository that started from "the lane was fine" later found a boot where it was not.  So the rule is:
+whenever work switches back from the production lane, run the audit over the boot that just served,
+before taking a baseline.
+
+```bash
+cd /data/work/ac922-strata-nvfp4
+CARDS=4 python3.11 ac922/eval/laneaudit.py            # the current boot
+CARDS=6 SINCE=200000 python3.11 ac922/eval/laneaudit.py   # or a trailing slice
+```
+
+Read-only: it parses the engine's own per-request telemetry block (prompt/reused/read with pp and tg,
+resident RAM and blob reads, expert and KV tier hit rates, the file-tier line, conversation-cache
+park/restore with eviction counts, the batched ring line with rows per group-step and MTP proposals
+kept).  No GPU, no request, no model text.  Exits non-zero on FAIL, so it can gate a switch.
+
+What each family means, and the verdicts we have actually earned:
+
+| Check | Question it answers | Adopted expectation |
+| --- | --- | --- |
+| `decode b1..b5` | did decode keep its band rates | p90 within 15% of the `PERFORMANCE.md` anchor; p90 not median, because concurrent traffic legitimately slows every stream |
+| `short-vs-deep inversion` | is a short window slower than a deep one | must not be; that shape is a defect, never noise (it is how the 2026-11-16 "decode 20 / prefill 500" report was finally reconciled) |
+| `cold pp b*` | did cold prefill keep its rates | median within 25% |
+| `batch rows/group-step` | are windows carrying more than one row | >= 1.3; near 1.0 means each window serves one sequence, so the shared expert read that makes batching worth anything never happens |
+| `expert blob reads` | did the RAM expert tier miss to storage | 0, hard FAIL |
+| `storage reads` | how often experts were fetched through the OS anyway | WARN with MB and major faults; a warm page cache should hold this near zero |
+| `KV VRAM hit` | how much of the window is waiting on the host | p10 >= 60; the residual is the host-wait surface still on the backlog |
+| `eviction shape` | is residency saturated | WARN when every eviction lands on the deepest parked level; averaged eviction counts hid this once (98.5% on one level named the knob) |
+| `prefill chunking` | how varied the deep-prefill chunk geometry is | informational WARN: chunk size depends on live slots, and that is the mechanism behind the deep-window hash instability in `DEVLOG.md` H.3 |
+| `mtp acceptance`, `cc restore live/ckpt` | are the mechanisms we paid for still armed | acceptance >= 0.55 (adopted ~0.72-0.74); live restores should dominate checkpoint rebuilds |
+| `engine-respawn`, `fatal-signatures` | did the engine die and get reborn under a green `/health` | one `engine started:` line per boot, zero death strings |
