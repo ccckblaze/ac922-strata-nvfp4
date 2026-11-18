@@ -441,6 +441,18 @@ to H.4, and the inversion check still clean at 1.19.  That stability is the poin
 every switch back: it is what lets a later WARN be read as a change rather than as noise.
 
 ## Deferred to an evening window (operator uses the box by day)
+## Deferred to an evening window (operator uses the box by day)
+
+- **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
+  comes from `sbench.py`/`depthtg.py`, which build depth out of one repeated sentence.  That is exactly
+  the mechanism that made the S1 archive points incomparable (repeated corpus feeds the suffix/ngram
+  draft path, so decode looks faster than on real prose), and the chart says so while keeping them as
+  hollow markers.  Our own lane has never been measured against a natural long corpus at the same
+  depths.  Cheap check: one ladder at 4K / 65K / 131K, single stream, FILL vs natural, same boot.  The
+  lane audit says the exposure is bounded - p90 against the adopted anchors under *real* traffic came
+  out 0.88-1.06, so any inflation is of that order and concurrency pushes the other way - but a
+  published panorama should state the corpus, and if the delta is over ~5% the fix is to re-mark the
+  ladder on natural text, not to annotate it.  ~20 min, 4 cards.
 
 - Monster 6-card per-card VRAM + same-moment host RAM: one 6-card boot, ~20 min, sampling only.
 - S1 int8 deep-window tg on a natural long corpus: 4 cards, ~30 min; would replace the hollow
