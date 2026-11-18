@@ -26,6 +26,10 @@ env: ENG engine log (default /data/champion/strata-nvfp4-engine.log)
           bands with too few samples are skipped, so an audit right after a quiet stretch prints
           fewer lines rather than inventing a verdict.
      GEN_MIN ignore decode samples with fewer generated tokens than this (default 32)
+
+Sample floors: the boot scope judges a decode band at n>=3 and cold prefill at n>=2; a narrower
+scope (delta or trailing lines) needs 6 and 4 and prints SKIP below that, because a handful of
+requests sharing the lane with live concurrency is not a band rate.
 """
 import os, re, statistics
 
@@ -200,10 +204,19 @@ def main():
     note("fatal-signatures", str(nf), "FAIL" if nf else "PASS",
          ",".join("%s=%d" % (k, v) for k, v in fatal_hits.items() if v) or "none of the death strings")
 
+    # A delta window can hold a band with three samples, and three samples under live concurrency
+    # say nothing about a band rate.  Below the floor the numbers are printed with SKIP: visible, so
+    # the window is not silently missing, but never counted as a verdict.
+    min_tg, min_pp = (3, 2) if SINCE == "boot" else (6, 4)
     a = ANCHOR[CARDS]["tg"]
     for i, (_, _, lab) in enumerate(BANDS):
         xs = tg_by.get(i) or []
-        if len(xs) < 3:
+        if not xs:
+            continue
+        if len(xs) < min_tg:
+            note("decode " + lab, "p90 %.1f/%.1f=%.2f" % (p90(xs), a[i], p90(xs) / a[i]), "SKIP",
+                 "n=%d below the %d-sample floor for this scope - shown, not judged"
+                 % (len(xs), min_tg))
             continue
         r = p90(xs) / a[i]
         v = "PASS" if r >= 0.85 else ("WARN" if r >= 0.70 else "FAIL")
@@ -211,7 +224,10 @@ def main():
              "n=%d med=%.1f p10=%.1f" % (len(xs), statistics.median(xs), p10(xs)))
     sh = tg_by.get(0) or []
     dp = (tg_by.get(3) or []) + (tg_by.get(4) or [])
-    if len(sh) >= 3 and len(dp) >= 3:
+    if (len(sh) or len(dp)) and not (len(sh) >= min_tg and len(dp) >= min_tg):
+        note("short-vs-deep inversion", "n %d/%d" % (len(sh), len(dp)), "SKIP",
+             "both sides need %d samples in scope" % min_tg)
+    if len(sh) >= min_tg and len(dp) >= min_tg:
         ratio = statistics.median(sh) / statistics.median(dp)
         note("short-vs-deep inversion", "med %.1f/%.1f=%.2f" % (statistics.median(sh),
                                                                 statistics.median(dp), ratio),
@@ -219,7 +235,13 @@ def main():
     ap = ANCHOR[CARDS]["pp"]
     for i, (_, _, lab) in enumerate(BANDS):
         xs = pp_by.get(i) or []
-        if len(xs) < 2:
+        if not xs:
+            continue
+        if len(xs) < min_pp:
+            note("cold pp " + lab, "med %.0f/%.0f=%.2f" % (statistics.median(xs), ap[i],
+                                                           statistics.median(xs) / ap[i]), "SKIP",
+                 "n=%d below the %d-sample floor for this scope - shown, not judged"
+                 % (len(xs), min_pp))
             continue
         r = statistics.median(xs) / ap[i]
         v = "PASS" if r >= 0.75 else ("WARN" if r >= 0.55 else "FAIL")

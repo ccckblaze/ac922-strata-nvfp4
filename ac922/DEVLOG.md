@@ -423,7 +423,13 @@ traffic it already judged, and the newest traffic - the part actually at risk - 
 (`WM=` to relocate), and a line-window scope counts `engine started:` lines inside the window:
 0 restarts PASS, 1 means the lane restarted while nobody was watching (WARN), 2+ FAIL.
 
-Second guard, against a specific kind of false comfort: a clean sweep over an empty window used to
+The first real delta window (96 requests) then taught the second lesson: `decode b3 80-165K` came
+back **WARN at 0.79 on n=5**, which was the sample floor talking rather than the lane - five requests
+sharing the box with live concurrency cannot define a band p90.  A narrow scope now needs 6 decode
+samples (4 cold-prefill) per band to judge, and prints the band's numbers as **SKIP** below that:
+visible, never silently missing, never a verdict.  The boot scope keeps its old floors (3 / 2).
+
+Third guard, against a specific kind of false comfort: a clean sweep over an empty window used to
 print `LANEAUDIT-PASS`.  Under a delta scope, fewer than five requests now prints **`THIN`** - a clean
 sweep is not evidence about rates.  A green lane has to mean green over traffic.
 

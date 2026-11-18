@@ -168,7 +168,11 @@ CARDS=4 SINCE=delta python3.11 ac922/eval/laneaudit.py
 
 Verdicts are `PASS` / `WARN` / `FAIL` / `THIN`.  `THIN` means the sweep was clean but the window held
 fewer than five requests, which is not evidence about rates -- audit again after more traffic, or
-fall back to `SINCE=boot`.  A green lane must always mean "green over traffic", never "green over
+fall back to `SINCE=boot`.  The same reasoning applies per band: a narrow scope needs 6 decode
+samples (4 cold-prefill) in a band before that band gets a verdict, and prints **`SKIP`** with its
+numbers below that.  A few requests sharing the lane with live concurrency is not a band rate -- the
+first delta audit on the box flagged `decode b3 80-165K` at 0.79 on n=5, which was the sample floor
+talking, not the lane.  A green lane must always mean "green over traffic", never "green over
 nothing".  In a line-window scope `engine-respawn` counts the `engine started:` lines inside the
 window: zero is expected, one means the lane restarted while you were away (WARN, check why), two
 means it did it more than once (FAIL).
