@@ -524,6 +524,25 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
 - Not done (evening window): the full-geometry paired A/B vs 0.1.59 (§57.1 protocol) and the production cutover.
   For the cutover, stop the old engine *before* starting 0.1.61 - same lesson, its pinned phases need the headroom.
 
+### H.9 - the repo line grew a 6-card lane, and the layout's real owner was `lane.env` (11-19 17:5x-19:0x)
+
+- `lane.sh 6` could not boot the shipping config at all: serve wants one rising `layer_split`
+  number per extra GPU and the base json carries the tuned 4-card `9,24,37`.  The repo launcher now
+  falls back to `auto` whenever the card count is not 4 (exactly what the historical 6-card boots
+  self-reported, "split auto"); `STRATA_LAYER_SPLIT=<shape>` pins an explicit geometry when one is
+  tuned.  Caught live: the failure surfaced as a python traceback in the supervisor log with the
+  frontend never answering - `lane.sh status`'s GEOMETRY-FAIL is what pointed at it.
+- Layout ownership: `lane.sh` sources `/data/work/lane.env` (SRC/MODEL_DIR/LOGD/RUN_JSON/PIDF/
+  NUMABIND_SO), and `/root/strata-nvfp4-run.sh` is a separate wrapper.  They had silently diverged
+  (wrapper at bump-src, lane.env still the old tree) - a `lane.sh 6 start` would have booted the
+  0.1.59 tree under a "cutover" label.  One layout file now says `SRC=/data/work/bump-src`; check
+  `lane.sh start` prints `layout: SRC=...` before believing any boot's lineage.
+- 6-card adoption on 0.1.61 (same protocol as the 4-card cutover): GEOMETRY-PASS (3 groups of 2,
+  auto placement), qualgate 0, 6x262K warm 5/6 `held_edge` (one natural EOS, the shipping-boot
+  signature) at agg **158.5** vs 145.6 (+8.9%); 6x262K cold agg 131.4; solo 8K **91.8** vs 82.1
+  (+11.8%), solo 50K 80.8 vs ~80.3; 131K x6 138.4.  Watch-item: 8K x6 agg 182.1 came in under both
+  our 50K x6 (208.0) and the morning A1_6x3 reference (227.9) - rerun when idle before trusting it.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama

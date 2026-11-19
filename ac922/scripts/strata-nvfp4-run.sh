@@ -139,6 +139,17 @@ def setflag(name,val):
         c["args"][c["args"].index(name)+1]=str(val)
     else:
         c["args"]+=[name,str(val)]
+# The shipping "layer_split" is tuned for the 4-card lane (9,24,37).  Six cards have no tuned
+# shape in this repo's line; serve wants one rising number per extra GPU, so a non-4 card lane
+# falls back to "auto" (placed by each card's free VRAM) - exactly what the historical 6-card
+# boots recorded.  STRATA_LAYER_SPLIT overrides; "auto" keeps the engine's own default.
+if len(c["gpu"]) != 4 or "STRATA_LAYER_SPLIT" in os.environ:
+    sp = os.environ.get("STRATA_LAYER_SPLIT", "auto")
+    c.pop("layer_split", None)
+    while "--layer-split" in c["args"]:
+        i = c["args"].index("--layer-split"); del c["args"][i:i+2]
+    if sp != "auto":
+        c["layer_split"] = sp; setflag("--layer-split", sp)
 ncard=len(c["gpu"])
 if batch<2 and groups<2 and ncard in (4,6):
     batch,groups=(4,2) if ncard==4 else (6,3)
