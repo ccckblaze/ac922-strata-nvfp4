@@ -543,6 +543,11 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   (+11.8%), solo 50K 80.8 vs ~80.3; 131K x6 138.4.  Watch-item: 8K x6 agg 182.1 came in under both
   our 50K x6 (208.0) and the morning A1_6x3 reference (227.9) - rerun when idle before trusting it.
 
+- 8K x6 follow-up (same boot, three paired runs): **182.1 / 207.4 / 231.9** against 50K x6 205.8/208.0 -
+  i.e. no regression, but the shallow cache-hit regime is **queue-timing dominated**: prefills are
+  ~100 ms (7927/7932 reused), so the span moves with admission overlap and CC state, ~±12% around
+  the median. Judge 8K x6 from medians of >=3 runs, never from a single panel row.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
