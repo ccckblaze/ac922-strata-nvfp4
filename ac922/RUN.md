@@ -65,6 +65,41 @@ here works without touching `configs/strata-nvfp4-final.json`.
 4. Wait for health (`/health`, typically 3–7 min: the engine locks ~48 GiB of experts and fills
    the GPU expert cache; the box may be slow for 1–3 minutes, which is normal).
 
+## After a host reboot: what is still yours and what quietly changed
+
+This box gets rebooted for real operations (DIMMs, disks), so treat "it came back" as a claim to
+check, not an assumption.  Everything below was re-verified on 2026-11-19 after a cold reboot:
+
+| Item | Where it comes from | How to verify it survived |
+| --- | --- | --- |
+| swap off | nothing re-enables it (no unit, no fstab entry) | `swapon --show` prints nothing |
+| `vm.swappiness 10`, `vm.dirty_ratio 0`, `vm.min_free_kbytes 360448` | `ac922-memcfg.service` -> `/usr/local/sbin/ac922-memcfg --apply --tmpfs shm`, which derives the numbers from the **real CPU-attached DDR**, so a DIMM change is picked up on the next run | `sysctl vm.swappiness vm.dirty_ratio vm.min_free_kbytes` |
+| `/dev/shm` 8 G | the same unit (`--tmpfs shm`) | `findmnt -no SIZE /dev/shm` |
+| 57 GiB of locked memory | the shell limit is still `64` (KiB) and stays that way; root's `CAP_IPC_LOCK` overrides `RLIMIT_MEMLOCK`, which is why pinning works without editing limits.conf | the engine's own line: `mapped pinned cache complement ready: resident 57.07 GiB, pinned 57.07 GiB in 18 s` |
+| NUMA shim | built file at `/data/work/numabind.so` | `lane4.sh start` refuses when it is missing, `status` prints `shim : LD_PRELOAD=...` |
+| LAN entry `192.168.168.171:8091` | `ac922-strata-lan-proxy.service` (enabled, came back on its own) | `curl` `/health` on the LAN IP, not only on `127.0.0.1` |
+
+Three operational facts worth remembering:
+
+- **Public relay is not on this host.**  After this reboot the BMC reported
+  `HostState.Running` while `ssh ac922-ip` (the 3322.org:2222 mapping) stalled at *banner exchange* -
+  the mapping lives on the router, so it does not recover with the OS.  The lab jump (`ssh ac922-j`,
+  via `jlab`) reaches the host directly and is the route to use until the relay comes back.
+- **Reboot is also the fix for unattributed VRAM.**  Card 4 had held 14,190 MiB for ~14 h with
+  `nvidia-smi -i 4 -q -d PIDS` = `Processes: None`, 0% utilization and identical readings across
+  samples - a leaked driver allocation, not somebody's live job.  After the reboot it read 0 MiB.
+  Check `PIDS` before blaming a co-resident thread for "occupying" a card.
+- **A co-resident job does not come back by itself.**  The I2V/GR00T stream on card 5 was the only
+  other live GPU tenant and died with the reboot; its owner has to restart it.
+
+On the launch itself: `lane4.sh start` boots, waits for `/health`, proves the geometry and prints
+`GEOMETRY-PASS`, but it does not reliably return to the caller afterwards - the launcher ends up
+`sitting in wait` on the serve frontend (observed: PID reparented to init, frontend stdout already
+redirected to the log, so the lane does not depend on the caller's channel).  Consequences that
+actually matter: never pipe the start into `tail`/`head` (the pipe keeps the whole output buffered
+and you conclude the boot hung when only your reader did), and read the verdict with
+`bash ac922/scripts/lane4.sh status`, which re-runs the same geometry proof read-only.
+
 ## Development lane on the leftover cards (requires operator authorization)
 
 Once the pinned lane holds the 4-card geometry (the shipped default, see step 3 above), cards

@@ -440,6 +440,40 @@ restores 339 live / 41 checkpoint.  Decode band p90 ratios 1.06 / 1.04 / 0.93 / 
 to H.4, and the inversion check still clean at 1.19.  That stability is the point of running it on
 every switch back: it is what lets a later WARN be read as a change rather than as noise.
 
+### H.6 — cold reboot, and what it proved about the lane and about card 4 (11-19 10:0x)
+
+Operator rebooted the box.  Restoring the 4-card lane was the occasion to check every ops assumption
+in `RUN.md` ("After a host reboot") rather than trust them, and to answer the question that had been
+hanging since yesterday: who was holding card 4.
+
+Pre-flight, all confirmed after the reboot: swap still off; `vm.*` re-derived by `ac922-memcfg`
+(swappiness 10, dirty ratios 0, min_free 360448 KiB); `/dev/shm` 8 G; `/data` on `xfs` 5.7 T with
+3.1 T free; NUMA nodes 126,744 + 130,782 MB = the real 256 GiB of CPU-attached DDR; NUMA shim and
+LAN proxy service back on their own.  One thing that did **not** come back: the public relay - the
+BMC said `HostState.Running` while `ssh ac922-ip` stalled at banner exchange, because the mapping
+lives on the router.  The lab jump (`ssh ac922-j`) works, so the lane is reachable either way.
+
+Card 4 read 0 MiB after the reboot.  It had held 14,190 MiB for ~14 h with `PIDS: None`, 0% util and
+byte-identical readings, which is now proven to be a leaked driver allocation and not a live tenant -
+so neither our lane nor the co-resident thread was "occupying" it.  The answer to "did you take 4/5"
+was always no on the evidence (`CUDA_VISIBLE_DEVICES=0,1,2,3`, engine fds only on nvidia0-3); the
+honest residue of that question is the leak, and reboots clear leaks.
+
+Boot 420, and the acceptance the reboot demanded: `GEOMETRY-PASS 4 cards (0,1,2,3), 2 groups of 2,
+shim loaded`, split `0-8 / 9-23 / 24-36 / 37-47`; pinned `resident 57.07 GiB, pinned 57.07 GiB in
+18 s`, 0 blob reads; after the acceptance traffic, free VRAM per card 568 / 693 / 686 / 290 MiB (the
+anchored boot was 528 / 633 / 626 / 237 - the same shape, slightly roomier).  Quality gate
+`QUALGATE-PASS` with `acc-drift-ok 1.0` and four `relay-cell-drift` WARNs at 64K/131K, which is the
+calibrated reproducibility floor in `qualgate.sh` (cold cells clean, FAIL only on total collapse).
+The factory invariant held on the fresh boot: `FULLWINDOW-PASS 1/1 held the window edge at
+prompt+gen=262136`, `ptok 261632` exact, `tg 59.58`, warm ttft 1.22 s.
+
+Two process lessons, both now in `RUN.md`.  Piping `lane4.sh start` through `tail` looks exactly like
+a hung boot and is not one - the launcher legitimately lingers waiting on the frontend, and the
+buffered reader swallows `GEOMETRY-PASS`; the verdict belongs to `lane4.sh status`.  And the
+switch-back audit needs its watermark re-seeded per boot (`296004` now), otherwise `SINCE=delta`
+audits across a reboot and reports a restart that nobody hid.
+
 ## Deferred to an evening window (operator uses the box by day)
 ## Deferred to an evening window (operator uses the box by day)
 
