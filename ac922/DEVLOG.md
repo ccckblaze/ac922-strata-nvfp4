@@ -474,7 +474,36 @@ buffered reader swallows `GEOMETRY-PASS`; the verdict belongs to `lane4.sh statu
 switch-back audit needs its watermark re-seeded per boot (`296004` now), otherwise `SINCE=delta`
 audits across a reboot and reports a restart that nobody hid.
 
-## Deferred to an evening window (operator uses the box by day)
+### H.7 — the dev lane wedged the driver and cost the operator an hour (11-19 12:0x-12:5x)
+
+Symptom: production `/v1/responses` errors for the operator from ~12:38, cards empty at 12:45, no OOM in
+`dmesg`.  First blame - "`devlane.sh restart` killed the prod tree" - was wrong: `stop()` walks only its own
+pidfile tree (audited line by line), and the prod tree was already gone before it could matter.
+
+Real chain, from `coredumpctl`, the supervisor logs and `/sys/fs/pstore`:
+
+1. The paired A/B (`devarm.sh`) ran the OLD arm (0.1.59, prod build path) on cards 4/5 with
+   `--resident-budget-gib 16 --batch 2`.  Its batched prompt read hung at layers 5/9/15 from token 0, the
+   hang watchdog (issue #29) SIGABRT-ed the engine every ~2 minutes (12:22-12:31, five cores), and the
+   supervisor dutifully respawned it every time.
+2. On this box a SIGABRT mid-`rm_init_adapter` holds the global NVIDIA RM semaphore for minutes: pstore
+   preserved a hung task in `os_acquire_semaphore -> rm_init_adapter -> nvidia_open`.  That wedge is
+   global, not per-card - production requests stalled behind it.
+3. The operator power-cycled the machine at 12:43:21 (journal ends with no shutdown sequence; proxy unit
+   up at 12:43:39).  Production was restored by hand at 12:45:52 (`lane4.sh start`); `loaded:true` and a
+   real graded 200 by 12:48, decode back in the normal 34-112 tok/s band.
+
+Guardrails from today:
+
+- Never run the dev lane unattended on an unproven binary x config combination; the hang-watchdog respawn
+  loop converts one hang into a driver-wide wedge.  If a dev engine aborts 3x in 10 minutes, kill its
+  supervisor - do not let it boot again.
+- Production `/health` plus one graded probe, immediately before and after ANY dev-lane action, abort on
+  failure.  And no dev-lane work inside the operator's window at all - the freeze stands until the box is
+  explicitly handed over.
+- `coredumpctl` + `/sys/fs/pstore` are the witnesses when journald dies mid-crash; check both before
+  assigning blame.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
@@ -518,6 +547,8 @@ audits across a reboot and reports a restart that nobody hid.
    (it kills your own session).
 5. Card count buys concurrency; stage count and expert streaming buy speed — do not spend on the
    wrong axis.
+6. A crash loop inside `nvidia_open` is a whole-box event, not a lane event: the RM semaphore is global.
+   Unattended respawn after a watchdog abort can take production with it (H.7).
 6. Read a flag's own help before modeling it: "--prompt-cache N = N conversation checkpoints"
    (global, not per conversation) and "--batch-mtp ... not with --batch-groups" each killed a
    designed experiment before it cost GPU-hours.
