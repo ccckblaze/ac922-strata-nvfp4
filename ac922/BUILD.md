@@ -78,11 +78,34 @@ the ggml/mtmd stack pinned to this engine's llama.cpp commit:
 
 ```bash
 T=/opt/rh/gcc-toolset-12/root/usr
-cmake -B build-vision -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_CURL=OFF \
+cmake -S tools/vision -B build-vision -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_CURL=OFF \
       -DCMAKE_C_COMPILER=$T/bin/cc -DCMAKE_CXX_COMPILER=$T/bin/c++
 cmake --build build-vision -j --target strata-vision
 # must be CPU-only: the process must not hold a CUDA context (vision.gpu=false is the adopted shape)
 ```
+
+**`-S tools/vision` is not optional.**  The vision program is its own CMake project (`strata_vision`),
+so `cmake -B build-vision` from the repository root silently configures the *engine* tree and the
+build then dies with `No rule to make target 'strata-vision'` - which is how it was rediscovered the
+hard way on 2026-11-19 while bumping to `0.2.15-nvfp4.2`.  `CMAKE_HOME_DIRECTORY` in the shipping
+`build-vision/CMakeCache.txt` reads `.../tools/vision`, which is the proof of the shape.
+
+`LLAMA_DIR` defaults to the vendored `third_party/strata-llama` (llama + mtmd + ggml at the engine's
+pin, nothing downloaded), with an override "kept for two releases".  **On ppc64le the vendored path
+does not configure yet**: `third_party/strata-llama/ggml/src/ggml-cpu/arch/` ships only `arm` and
+`x86`, so the configure stops at `Cannot find source file: ggml-cpu/arch/powerpc/quants.c`.  Our
+ppc64le shim (`a2f280b16`, the forwarding `quants.c` plus `-U__POWER9_VECTOR__`) was written against
+`third_party/strata-ggml`, which is what the *engine* builds; the vision project pulls a second,
+independent copy of ggml out of `strata-llama`, and the shim has not been replicated there.  Until it
+is, build vision the way the shipping binary was built - against the pinned checkout:
+
+```bash
+cmake -S tools/vision -B build-vision ... -DLLAMA_DIR=/data/work/ac922-strata-nvfp4/third_party/llama.cpp-3cf03257f219afbe7334045ff7c6a06ac68c627d
+```
+
+Open ticket, small and ours: put the same two-part shim under `third_party/strata-llama/ggml/...` so
+the vendored path configures on POWER9, then drop the override.  It blocks a *vision-on* production
+switch after a bump, not the text lane.
 
 The toolset pin is load-bearing here as well, for a different reason than the engine build.
 `ggml-backend-reg.cpp` uses `std::filesystem`, and GCC 8.5 keeps that in a separate `libstdc++fs`:
