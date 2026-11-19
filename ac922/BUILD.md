@@ -92,20 +92,11 @@ hard way on 2026-11-19 while bumping to `0.2.15-nvfp4.2`.  `CMAKE_HOME_DIRECTORY
 
 `LLAMA_DIR` defaults to the vendored `third_party/strata-llama` (llama + mtmd + ggml at the engine's
 pin, nothing downloaded), with an override "kept for two releases".  **On ppc64le the vendored path
-does not configure yet**: `third_party/strata-llama/ggml/src/ggml-cpu/arch/` ships only `arm` and
-`x86`, so the configure stops at `Cannot find source file: ggml-cpu/arch/powerpc/quants.c`.  Our
-ppc64le shim (`a2f280b16`, the forwarding `quants.c` plus `-U__POWER9_VECTOR__`) was written against
-`third_party/strata-ggml`, which is what the *engine* builds; the vision project pulls a second,
-independent copy of ggml out of `strata-llama`, and the shim has not been replicated there.  Until it
-is, build vision the way the shipping binary was built - against the pinned checkout:
-
-```bash
-cmake -S tools/vision -B build-vision ... -DLLAMA_DIR=/data/work/ac922-strata-nvfp4/third_party/llama.cpp-3cf03257f219afbe7334045ff7c6a06ac68c627d
-```
-
-Open ticket, small and ours: put the same two-part shim under `third_party/strata-llama/ggml/...` so
-the vendored path configures on POWER9, then drop the override.  It blocks a *vision-on* production
-switch after a bump, not the text lane.
+configures since the `0.2.15-nvfp4.2` bump**: our ppc64le shim (the forwarding `quants.c` plus
+`-U__POWER9_VECTOR__`, originally `a2f280b16` for `third_party/strata-ggml`) has been replicated into
+`strata-llama`, because the vision project compiles its own second copy of ggml.  `check_vendored`
+tracks both rows (1 edited / 1 added, pin `3cf03257f`); no `LLAMA_DIR` override is needed, and the
+plain command above is what produced the shipping `build-vision` on 2026-11-19 (H.8).
 
 The toolset pin is load-bearing here as well, for a different reason than the engine build.
 `ggml-backend-reg.cpp` uses `std::filesystem`, and GCC 8.5 keeps that in a separate `libstdc++fs`:

@@ -138,6 +138,7 @@ c["exe"]=os.path.join(src,"build","strata"); c["cwd"]=src
 c["log"]=os.path.join(logd,"strata-nvfp4-dev-engine.log")
 fix=lambda s: str(s).replace("/data/work/strata-nvfp4-src",src).replace("/data/work/Strata-data/models/nvfp4-gptq",model_dir)
 c["args"]=[fix(x) for x in c["args"]]
+if isinstance(c.get("vision"),dict) and "exe" in c["vision"]: c["vision"]["exe"]=fix(c["vision"]["exe"])
 def setflag(name,val):
     if name in c["args"]: c["args"][c["args"].index(name)+1]=str(val)
     else: c["args"]+= [name,str(val)]

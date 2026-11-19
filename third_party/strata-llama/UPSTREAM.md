@@ -6,6 +6,14 @@ sources, copied unchanged from llama.cpp, so a release build, a Docker build, CI
 
 pin: 3cf03257f219afbe7334045ff7c6a06ac68c627d
 
+
+**AC922 edits (2).** Identity is nearly empty but not quite: `ggml/src/ggml-cpu/arch/powerpc/quants.c`
+is our own added shim (it forwards every non-generic `ggml_vec_dot_*` to the `*_generic` reference impl -
+the same edit `third_party/strata-ggml` carries, replicated here because the vision project compiles its
+own ggml copy), and `ggml/src/ggml-cpu/CMakeLists.txt` adds `-U__POWER9_VECTOR__` to the PowerPC
+ARCH_FLAGS so the scalar shim compiles under `-mcpu=power9`. Without them a fresh ppc64le configure of
+`tools/vision` stops at "Cannot find source file: ggml-cpu/arch/powerpc/quants.c".
+
 Upstream: https://github.com/ggml-org/llama.cpp at that commit (the same pin as `third_party/strata-ggml`, `third_party/strata-gguf-py` and
 `third_party/ggml/VERSION.txt`). Licence: MIT, Copyright (c) 2023-2026 The ggml authors, in `LICENSE` beside this file; the third-party licences llama.cpp
 lists are in `licenses/` and in the headers of `vendor/` (miniaudio: MIT-0 / public domain, stb: MIT / public domain, nlohmann json: MIT, sheredom
@@ -92,7 +100,8 @@ upstream 2dd6a572f087a1fddaa52dbf2378b777cd21752f4b2a1292c8da3bcb05fbcfd9 2dd6a5
 upstream dc7028c2c7207e8c334fd61ea4556599a326710cd9b33050bace38833529df71 dc7028c2c7207e8c334fd61ea4556599a326710cd9b33050bace38833529df71 ggml/src/ggml-blas/CMakeLists.txt
 upstream d81fd424f08c47b5fc2711030b94104a487d2acad9b197783e7dd2c99caeba37 d81fd424f08c47b5fc2711030b94104a487d2acad9b197783e7dd2c99caeba37 ggml/src/ggml-blas/ggml-blas.cpp
 upstream 0061131b615c5721fc88a78feeb22c1f8c450f1c2646a317d80796a653bf595c 0061131b615c5721fc88a78feeb22c1f8c450f1c2646a317d80796a653bf595c ggml/src/ggml-common.h
-upstream ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ggml/src/ggml-cpu/CMakeLists.txt
+edited 00824bee0cc32560b22410c3a2701f2e971588d662db4aab329c4f96552e1cc0 ed4d3cf43377accac79bd09b4b93c10725e66f189e1ddfcd528c7c29508cf3d0 ggml/src/ggml-cpu/CMakeLists.txt
+added 1fea7859473390f64e0921cc7a274978510022c5a5251dc68c932dec2f9dbc86 -  ggml/src/ggml-cpu/arch/powerpc/quants.c
 upstream 636d1e4b858a86ad6568100bbdb4bf9715d9dfb25d3831415d55e04e39acad86 636d1e4b858a86ad6568100bbdb4bf9715d9dfb25d3831415d55e04e39acad86 ggml/src/ggml-cpu/amx/amx.cpp
 upstream 9d098ceee6a8114d4a660ff269064a27aa25b8a4f205d1e6984d17bec5104f0d 9d098ceee6a8114d4a660ff269064a27aa25b8a4f205d1e6984d17bec5104f0d ggml/src/ggml-cpu/amx/amx.h
 upstream c694f6bb066a820b717f986914b0d112dca0d8d3a1e239e958fce30c864751c3 c694f6bb066a820b717f986914b0d112dca0d8d3a1e239e958fce30c864751c3 ggml/src/ggml-cpu/amx/common.h

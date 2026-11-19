@@ -504,6 +504,26 @@ Guardrails from today:
 - `coredumpctl` + `/sys/fs/pstore` are the witnesses when journald dies mid-crash; check both before
   assigning blame.
 
+### H.8 — the bump's first breath: vision on the vendored tree, and a cublas failure that was memory discipline (11-19 14:5x-15:2x)
+
+Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on cards 4/5, production untouched on
+0-3 the whole time.
+
+- **vision builds from the repo itself now.** The ppc64le shim was replicated from `third_party/strata-ggml` into
+  `third_party/strata-llama` (`arch/powerpc/quants.c` added, `-U__POWER9_VECTOR__` in the PowerPC ARCH_FLAGS,
+  manifest rows, UPSTREAM.md note); `check_vendored` says ok (917 upstream / 1 edited / 1 added). The `LLAMA_DIR`
+  override in BUILD.md is obsolete as of this commit. `devlane.sh` had a second self-trap: its `fix()` rewrote
+  paths in `args` but not `vision.exe`, so a dev lane would have run the *other* tree's vision helper - patched.
+- **cublasCreate status 1/3 at the end of startup is a budget collision, not an engine regression.** With the
+  shipping-shape dev arm (resident 16 + CC 32 GiB, production already page-locking ~190 GiB), the engine fails its
+  first cuBLAS handle right after the stepwise page-lock dance ("9.15 GiB really free for an 11.60 GiB
+  complement"). Cut the budgets (resident 2-6, CC 4-8 GiB, ctx 32K) and it loads in <20 s, text answers (17*23),
+  and the vision probe (solid red) passes end to end. Rule: when co-tenanting a dev lane with production, size the
+  dev lane's pinned budget against `MemAvailable` *before* the page-lock phase, not after; a cryptic cuBLAS status
+  at the end of startup is the last domino, not the cause.
+- Not done (evening window): the full-geometry paired A/B vs 0.1.59 (§57.1 protocol) and the production cutover.
+  For the cutover, stop the old engine *before* starting 0.1.61 - same lesson, its pinned phases need the headroom.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
