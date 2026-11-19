@@ -67,6 +67,19 @@ class Refresh(unittest.TestCase):
             setup.refresh_draft_vocab(rt, "fr")
             self.assertEqual((rt / "draft_vocab.bin").read_bytes(), bytes([1, 0, 0, 0]))
 
+    def test_latin_is_copied_and_says_so(self):
+        from unittest import mock
+        data = ROOT / "data"
+        if not (data / setup.DRAFT_VOCABS["latin"]).exists():
+            self.skipTest("data/draft_vocab_latin.bin is not in this checkout")
+        with tempfile.TemporaryDirectory() as d:
+            rt = Path(d)
+            (rt / "draft_vocab.bin").write_bytes((data / setup.DRAFT_VOCABS["cjk"]).read_bytes())
+            with mock.patch.object(setup, "ok") as said:
+                setup.refresh_draft_vocab(rt, "latin")
+            self.assertEqual((rt / "draft_vocab.bin").read_bytes(), (data / setup.DRAFT_VOCABS["latin"]).read_bytes())
+            self.assertEqual(said.call_args[0][0], "draft layer: the token subset with the Latin-script languages")
+
     def test_fr_holds_the_en_subset_in_its_order(self):
         # built with tools/draft_vocab.py --base data/draft_vocab_en.bin --corpus ...: the base first, unchanged
         from array import array
@@ -147,7 +160,7 @@ class SmallCardNote(unittest.TestCase):
         # this fork ships the Cyrillic subset as data/draft_vocab.bin (64f78268): the others scale with that one
         base = "cyrillic" if (ROOT / "data" / setup.DRAFT_VOCABS["cjk"]).read_bytes() == \
             (ROOT / "data" / setup.DRAFT_VOCABS["cyrillic"]).read_bytes() else "cjk"
-        for choice in ("en", "cyrillic", "fr"):
+        for choice in ("en", "cyrillic", "fr", "latin"):
             want = setup.DRAFT_VOCAB_MIB[base] * sizes[choice] / sizes[base]
             self.assertAlmostEqual(setup.DRAFT_VOCAB_MIB[choice], want, delta=3)
 

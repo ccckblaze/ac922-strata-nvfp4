@@ -378,6 +378,119 @@ Tried and dropped:
 - The adaptive tier's swaps spread over every round (24 a round instead of 96 every 4): 1.2% fewer rounds/s.
   Without the tier decode drops 23%. High process priority: no change.
 
+### DFlash2 drafts for the NVFP4 GPTQ (2026-11-18, release 0.2.15-nvfp4.2)
+
+Upstream kept DFlash2 (incoai's block drafter for Qwen3.8-Flash-Next) off for every NVFP4 model, because it had no
+acceptance numbers for one (strata_control/drafting.py `_EXCLUDED_NAME`). The drafter reads the target's hidden states at
+layers 5, 15, 25, 35 and 45 and was trained on the BF16 model, so nothing stops it on the GPTQ pack: the engine takes it
+as it is. Measured on the RTX 5090 with 0.2.15-nvfp4.1's engine and the tray's GPTQ profile, 1,000 new tokens a run,
+`--stop-eos`, arms interleaved and their order rotated per round:
+
+| Drafter | Decode, tokens/s | Tokens a round | ms a round | Drafting, ms a round | Expert slots |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MTP (`--spec 6 --spec-min-p 0.7`, the setup's) | 200.2 ± 3.4 | 2.38 | 11.82 | 0.88 | 8,345 |
+| DFlash2, window 6, conf 0.5 | **215.2 ± 4.1** | 2.66 | 12.33 | 0.73 | 8,503 |
+| DFlash2, window 8 | 213.7 ± 4.5 | 2.66 | 12.42 | 0.74 | 8,503 |
+| MTP, censorship switch on | 193.5 ± 3.8 | 2.37 | 12.13 | 0.90 | 8,345 |
+| DFlash2, censorship switch on | **212.9 ± 3.9** | 2.67 | 12.53 | 0.74 | 8,503 |
+
+- +7.5% decode (+10% with the switch on, where the MTP guesses worse), and 158 more experts on the card: the drafter
+  (564 MiB with the Q4_0 selector) is smaller than the MTP layer.
+- The confidence, in one interleaved series: 0.35 gave 206.4 tokens/s, 0.5 208.6, 0.7 203.5. 0.5 is what the setup's rule
+  (CONF_STEPS) already gives a card of this size. A window of 8 adds nothing.
+- The drafter's precision is not what limits it: a Q8_0 drafter took 2.67 tokens a round against 2.68 for Q4_0 (and drafts
+  slower, with 152 fewer slots). Upstream's tuned `strata1` pack, trained on what Unsloth's GGUFs write, gave 2.66: no gain
+  on this model. A GPTQ or NVFP4 drafter could not gain either: drafting is 6% of a round.
+- Greedy output: on the short prompts no drafter, the MTP and DFlash2 give the same tokens. On a 400-token answer both
+  drafters leave the no-drafter text (the MTP at token 115, DFlash2 at 74). That comes from the verify windows, which have
+  other widths than one-token decode, and it is the same for both: they verify with the same captured windows of 1 to 6.
+- The dialog cache in RAM works with it: a dialog parked behind another came back in 19-24 ms, and the drafter rebuilt
+  its window rows from its own log (about 2,000 rows in 18 ms).
+
+What the release changes:
+- **Auto drafts with DFlash2 for the GPTQ set** (`qwen3.8-flash-next-gptq-nvfp4`, as setup and the zip's config name it)
+  on one CUDA card that holds at least 7,500 expert slots by the rule's estimate (`FORK_GPTQ_MIN_SLOTS`; the 5090 is
+  about 9,700). Cards of 12-24 GB, several cards, the DGX Spark and other engine families keep the MTP until they are
+  measured. NVIDIA's NVFP4 and the mix keep the MTP. DFlash2 or the MTP chosen by name wins over Auto.
+- Setup and the zip's `prepare-model.cmd` fetch the drafter where Auto uses it: the pinned 1.2 GB file is checked,
+  packed on the PC and removed; about 0.86 GB stays in `<model>/dflash2`. An install without the drafter drafts with the
+  MTP and says so; `prepare-model.cmd` (the zip) or setup run again gets it.
+- `drafting.data_dir_of` reads the fork's `<data>/pack` layout (it looked for upstream's `<data>/packs/<tag>` and found
+  the parent folder).
+- #5153 (upstream): saving a session file (`/slots/0?action=save`) with DFlash2 alone failed with "conversation
+  snapshot: invalid K/V extent", because SAVE and RESTORE passed the MTP layer's empty K/V. They now pass it only when the
+  MTP is loaded, as the RAM park already did. Saved and restored 6,200 tokens; the dialog went on from the file.
+- The zip has the draft vocabularies setup's `--draft-vocab en | fr | latin` name. Every subset holds the English and
+  code tokens; this fork's default (`draft_vocab.bin`) is the Cyrillic one, the same bytes as `draft_vocab_cyrillic.bin`.
+- The server's start waits up to 15 s (`STRATA_PORT_WAIT_S`) for its port when it is in use, then refuses as before. A
+  launcher that switches models (the tray, 2 of 5 switches) started the next server while Windows was still closing the
+  killed one's listener: for about 1.3 s the port was listed under a process that was already gone, and the new server
+  said "port 8091 is already in use" and ended. This is older than DFlash2: the check has been there since 0.1.40.
+
+### Upstream 0.2.15 (2026-11-18, release 0.2.15-nvfp4.1)
+
+The fork moves from upstream 0.2.13 to upstream 0.2.15 (the engine reports 0.1.61), the usual way (port-fork.md): the
+fork's 205 commits since 0.2.13 (with #26, #28, the `_mend_tags` fix of #24 and the hyper-connection read v5) were
+cherry-picked onto the tag, which gave 202 commits; 3 came out empty (their content was in files merged by hand). 22
+files that both sides changed were each carried over as one 3-way merge. Upstream's DeepSeek support is gone from
+setup, as upstream removed it.
+
+- **The NVFP4 prompt path stays on MMQ.** Upstream 0.2.14 builds the engine without llama.cpp's MMQ by default
+  (`-DSTRATA_MMQ=OFF`), and NVFP4 prompt experts then run on Strata's own int8 kernels. `release/build-release.cmd`
+  and setup's CUDA source build pass `-DSTRATA_MMQ=ON`, so NVFP4 prompts keep this fork's path (gate/up on two FP4
+  activation terms, down on w4a8). Measured on the 5090, tray GPTQ profile without the control vector, 3 interleaved
+  rounds, medians:
+
+  | prompt | 0.2.13-nvfp4.1 | this release | `STRATA_PF_FUSED=1` (upstream's int8 kernels) | built without MMQ |
+  |---|---|---|---|---|
+  | 2K | 2,826 tok/s | 2,869 tok/s | 2,832 tok/s | 2,812 tok/s |
+  | 8K | 6,846 | 6,825 | 6,842 | 6,831 |
+  | 32K | 8,799 | 8,794 | 8,540 | 8,443 |
+  | 128K | 9,231 | 9,185 | 8,743 | 8,819 |
+
+  Upstream's kernels give other answers. KL of the first verify window against this release, with 8 prompts at each
+  size and a paired bootstrap 95% CI: 0.0165 [0.0001, 0.0463] at 2K and 0.0758 [0.0004, 0.2132] at 32K. Running this
+  release twice gives 0.0019 at 2K and exactly 0 at 32K. Against the exact FP16 prompt path, upstream's kernels are
+  further off at 2K (0.0119 against 0.0018; the paired difference +0.0101 [+0.0002, +0.0251]) and closer at 32K
+  (0.0062 against 0.0668). The 32K figure comes from one prompt, where this fork's path has KL 0.51 against FP16; the
+  other seven stay at 0.023 or less. Eight prompts cannot settle that (the CI of the difference includes 0), so the
+  default stays as it was. `STRATA_PF_FUSED=1` selects upstream's kernels.
+- **Upstream's other new defaults do not change this fork's answers.** The release gives the same bits as
+  0.2.13-nvfp4.1 at 2K and 32K. With the fork's defaults switched off, it gives the same bits as clean upstream 0.2.15,
+  both built with MMQ and built without it. Some new defaults are compiled only into a build without MMQ: equal-size
+  long-prompt chunks and the tail rules. Others do not apply to this pack:
+  - the Q8_0 hyper-connection weights (this pack's are BF16);
+  - the fused prompt kernels on by default for the IQ/K-quant classes;
+  - the staged walk's batched group entry, which NVFP4 takes only with `STRATA_PF_FUSED=1`.
+
+  KV streaming's host DMA is on by default, but the tray profile keeps its K/V in VRAM (elastic K/V). Taken as
+  upstream ships them: the park pools, a replaced reply not being parked, and the elastic K/V growing from new VRAM
+  when the expert cache cannot lend. The last one replaces this fork's own fix for the same bug. Drafting stays MTP:
+  upstream's automatic DFlash2 still leaves NVFP4 models out.
+- **Tool arguments.** Upstream's #5979 does what this fork's Python booleans did. Its rules win where the two differ:
+  - any case of true / false is a declared boolean's value;
+  - with no schema, or where a string is allowed, the text stays text.
+
+  This fork still reads `True` / `False` for `anyOf` and untyped parameters.
+- **New in this fork: the hyper-connection read v5**, opt-in with `STRATA_GR_V5=1`. It removes v4's per-token
+  latency: loads no longer wait on each other behind a branch, T 7 and 8 get kernels of their own, and the up
+  prologue is spread over the whole warp. `gr_v4_check` compares it with the plain read: 128 of 128 cases give the
+  same bits (T 1 to 8, pending write and inject on and off, direct call and captured graph). At start the engine only
+  checks that the kernels fit the card. On the 5090 one read takes 10.9 to 17.9 us against v4's 11.8 to 26.3 us
+  (T 1 to 8), and a decode round 11.75 ms against 11.95 (6 runs each), because PDL already hid most of v4's time.
+- Checks: `ctest` 349 tests, 5 failing. Two are upstream tests that do not build under MSVC, two are as in 0.2.13 (no
+  model files), and one is upstream's Qwen3.6 fused test, which assumes a build without MMQ. The server suite runs
+  1673 tests, with 3 errors in `test_vision_cpu_fallback`: its temporary log is still open on Windows, and clean
+  upstream fails the same way. Host `npm test` runs 1694 tests: 1581 pass, 0 fail. Setup and fork tests: 1117 OK.
+  Decode (bench_prompt, 1000 tokens, stopping at the end of the turn, cache auto): the same speed. Five pairs against
+  the tray's 0.2.13-nvfp4.1 engine first gave 11.956 +- 0.132 ms a round against 11.742 +- 0.100. Six rotated rounds of
+  three engines then gave this release 11.707 +- 0.249, 0.2.13-nvfp4.1 11.605 +- 0.232, and a second 0.2.13 build
+  11.753 +- 0.198. That build differs from the release's engine by 9 bytes of PDB stamps and has the same cache (8,531
+  slots) and expert profile. Two builds of the same code are 0.15 ms apart, so that is the spread of these runs. The CPU
+  pool spends the same time per CPU expert in all three (2.34 to 2.35 ms); what varies is how many experts a layer
+  sends to the CPU (1.83 to 1.87), and that follows the routes of the text each run writes. The 32K prompt: 8,800
+  tokens/s against 8,817.
+
 ### Upstream 0.2.13 (2026-11-09, release 0.2.13-nvfp4.1)
 
 The fork moves from upstream 0.2.0-beta to upstream 0.2.13 (the engine reports 0.1.59). As before, the release takes
