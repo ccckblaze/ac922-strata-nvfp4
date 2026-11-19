@@ -548,6 +548,30 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   ~100 ms (7927/7932 reused), so the span moves with admission overlap and CC state, ~±12% around
   the median. Judge 8K x6 from medians of >=3 runs, never from a single panel row.
 
+### H.10 - the bump gets its paper: repanel, chart, and a lane-restore near-miss (11-19 19:2x-19:5x)
+
+- **Second 4-card boot on 0.1.61** (`repanel4c`, 19:21-19:42): 8K x6 **253.7** (vs 240.8),
+  50K x6 **231.5** (vs 245.0), 131K x6 **181.6** (vs 178.0), solo 8K **77.2** (vs 85.0),
+  solo 50K **74.6** (vs 70.7).  Boot-to-boot spread on the shallow cells is +-5-10% on 4 cards
+  too - the H.9 median rule is not a 6-card-only caution.  The pair means now ships as
+  `PERFORMANCE.md` §7 with the state column as the two-boot mean.
+- **`lane.sh 6 start` does not stop a live 4-card lane.**  The occupancy check printed
+  `cards clear` while GPU0 still held 14.7 GiB (it reads the lane's own pidfile, not the target
+  cards' VRAM), the new engine died against the old one's port and page locks, and the geometry
+  check then parsed the *dead boot's* log and printed GEOMETRY-FAIL over a healthy 4-card
+  `/health`.  `lane.sh 6 restart` is the correct card-count switch (it is what the docs say, but
+  the guard should make `start` impossible to misuse this way).  Ticket, not shipped: extend the
+  occupancy guard to per-card VRAM on the target set.
+- **Docs/chart round** (this commit): `PERFORMANCE.md` §7 (6-card same-protocol pairs, 4-card
+  two-boot state, full-window pair), `ACCURACY.md` 0.1.61 re-test block (GSM8K-500 97.00,
+  HumanEval-164 96.34 at the 3K budget - budget caliber, not a regression claim), the pin
+  corrected everywhere from `b08a70078`/0.1.59 to `828a8082d`/0.1.61 with the honest
+  "eleven engine-side files" diff, `RUN.md` layout now names `bump-src` as the serving tree and
+  the old tree as the rollback, and the new chart
+  `results/charts/ac922-bump-061-2026-11-19.png` (generator beside it).
+- Production restored: `GEOMETRY-PASS 6 cards (0,1,2,3,4,5), 3 groups of 2, shim loaded`,
+  `/health` loaded with images, cards 4/5 back in the lane.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama

@@ -11,6 +11,17 @@ All full-suite readings below have **errors = 0** and passed the budget audit.
 | MATH500 | 500 | **89.40%** | — |
 | HumanEval | 164 | **96.95%** (96.34% before tail fix) | 1 sample hit the 3,000-token budget and failed; re-run at 6,000 flipped it to pass (`flipped=1`). Both numbers published side by side, the 96.95 is the citable one |
 
+## 0.1.61 re-test (2026-11-19, 4-card boot after the bump)
+
+| Suite | n | Accuracy | Notes |
+| --- | ---: | ---: | --- |
+| GSM8K (500-item subset) | 500 | **97.00%** | 485/500, errors = 0; the full 1,319 suite has not been re-run on 0.1.61, 97.12% stays the citable full-suite number |
+| HumanEval | 164 | **96.34%** | 158/164 at the **3,000**-token budget; the same tail sample that 0.1.59 flipped at 6,000 was not re-run at 6,000 on 0.1.61 — the two numbers are budget calibers, not a regression claim |
+| MATH500 | — | not re-run | 89.40% remains the 0.1.59 reading |
+
+`qualgate` on the bumped lane: 0 FAIL, `det_same: true`, `acc-drift-ok` — the numeric path is
+unchanged at the gate level (`PERFORMANCE.md` §7c).
+
 ## Smoke tier (24 items — trajectory only, not citable as a score)
 
 | Suite | Smoke acc |

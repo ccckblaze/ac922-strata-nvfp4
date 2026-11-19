@@ -4,8 +4,10 @@
 
 ```
 AC922_ROOT=/data/work
-SRC=/data/work/ac922-strata-nvfp4          # this repo, pinned: engine, serve, vision encoder and
-                                           # data/expert-profile.bin all run from inside the checkout
+SRC=/data/work/bump-src                    # this repo at the 0.1.61 bump line: engine, serve, vision
+                                           # encoder and data/expert-profile.bin all run from inside
+                                           # the checkout.  The 0.1.59 tree (/data/work/ac922-strata-nvfp4)
+                                           # is kept intact as the rollback, not as the serving path.
 MODEL_DIR=/data/work/Strata-data/models/nvfp4-gptq   # 17 files, see results/MODEL-SHA256SUMS.txt
 LOGD=/data/champion
 ```

@@ -84,6 +84,9 @@ dependent); determinism is claimed only against the 10K `det` fixture.
   geometry (`layer_split 9,24,37`, `--vram-reserve-mib 832`): 4-card column re-measured over two
   boots, full-window 8/8 `finish=length` evidence, and the self-restart defect closed (generator:
   `results/charts/plot-samelen-v4-2026-11-17.py`).
+- `results/charts/ac922-bump-061-2026-11-19.png` — the 0.1.59 → 0.1.61 adoption re-test: 6-card
+  same-protocol pairs, 4-card two-boot state, and the byte-exact full-window pair (generator:
+  `results/charts/plot-bump-061-2026-11-19.py`).
 
 ## 4b. Window-shape family, 6 cards (2026-11-17 overnight sweep, `note312/shapes.jsonl`)
 
@@ -361,3 +364,54 @@ shapes were measured on the same harnesses to fix it without paying for it in sp
 - Card 3 still runs down to ~210 MiB free under sustained gate + full-window load.  It survived
   (no respawn), which is the difference between a thin margin and no margin, but it is why the
   respawn detector in `lane.sh` is mandatory and why the 6-card rebalance stays an open ticket.
+
+## 7. Engine bump 0.1.59 → 0.1.61 — adoption re-test (2026-11-19)
+
+The bump is whole-version, never cherry-picks (standing policy): upstream `828a8082d`
+(`v0.2.15-nvfp4.2`, strata **0.1.61**), 1169 commits / 280 engine files over the old pin
+`b08a70078`; our 72 commits carried eleven engine-side files across the merge (bump commit note,
+`DEVLOG.md` H.7-H.8).  Re-measure ran on the shipping lane with the `aggbench` protocol (warm
+burst, published `sum_tg` caliber): 4-card boots `cutover061` (15:38) and `repanel4c` (19:21),
+6-card boot `6c061` (18:12) plus three paired 8K×6 runs.
+
+### 7a. 6 cards, same protocol on both sides (0.1.59 arm = `A1_6x3`, the shipped shape)
+
+| Metric | 0.1.59 | 0.1.61 | Δ |
+| --- | ---: | ---: | ---: |
+| solo 8K | 84.5 | **91.8** | **+8.6%** |
+| solo 50K | 72.8 | **80.8** | **+11.0%** |
+| 8K × 6 | 227.9 | 207.4 (median of 182.1 / 207.4 / 231.9) | −9.0% — queue-timing dominated, read the band, not the point (`DEVLOG.md` H.9) |
+| 50K × 6 | 200.9 | 206.9 (208.0 / 205.8) | +3.0% |
+| 131K × 6 | 135.0 | 138.4 | +2.5% |
+| full window 6 × 262,136 warm | 145.6 | **158.5** | **+8.9%** (5/6 `held_edge`, 1 natural EOS — the shipping-boot signature) |
+| full window 6 × 262,136 cold | not taken same-caliber | 131.4 | — |
+
+### 7b. 4 cards, two boots (0.1.59 has no same-caliber 6-stream history — the shipped 4-card shape is 4-way, §6e.1)
+
+| Metric | boot 1 | boot 2 | state |
+| --- | ---: | ---: | ---: |
+| solo 8K | 85.0 | 77.2 | 81.1 |
+| solo 50K | 70.7 | 74.6 | 72.7 |
+| 8K × 6 | 240.8 | 253.7 | 247.2 |
+| 50K × 6 | 245.0 | 231.5 | 238.2 |
+| 131K × 6 | 178.0 | 181.6 | 179.8 |
+| full window 4 × 262,136 warm | 102.4 (4/4 `held_edge`) | — | **−4.2%** vs 0.1.59 106.9 (105.8 / 108.0), inside the boot band; the shipping-binary boot read 109.3 |
+| full window 4 × 262,136 cold | 90.7 | — | not taken on 0.1.59 same-caliber |
+
+- The 4-card lane keeps its full-window invariant on 0.1.61: every stream byte-exact to 262,136
+  with `finish=length`.
+- The short-window aggregates (247 / 238 at six streams) now read **above** the 6-card lane's —
+  the stage-count axis again (§5, `DEVLOG.md` H.9): six shallow streams share more per window on
+  four fat stages than on six thin ones.  Card count remains the full-window concurrency axis,
+  not the decode-rate axis.
+
+### 7c. Gates and accuracy on the bumped lane
+
+- `qualgate` 0 FAIL on both card counts, `det_same: true` against the anchor.
+- GSM8K-500 subset **97.00%** (485/500); HumanEval-164 **96.34%** (158/164) at the 3,000-token
+  budget — the 0.1.59 tail-fix sample fails again at 3,000 and was not re-run at 6,000 on 0.1.61;
+  MATH500 not re-run.  Caliber notes in `ACCURACY.md`.
+- Chart: `results/charts/ac922-bump-061-2026-11-19.png`.
+- Left open by this round: full-suite GSM8K / MATH500 / HumanEval on 0.1.61, the `sbench long`
+  ladder on the new engine (today's numbers are `aggbench` caliber; §6e.1's ladder is 0.1.59),
+  and the 8K×6 median band (±12%) still needs a third 6-card boot to tighten.

@@ -8,7 +8,7 @@
 > window** (6 concurrent on the 6-card reference), cold prefill crosses **7,000 tok/s** there and
 > **4,964 tok/s** here, and accuracy lands at **GSM8K 97.12 / MATH500 89.40 / HumanEval 96.95**.
 > Every number is measured on this machine, every knob carries an adopted-or-rejected ledger entry,
-> and the engine is exactly upstream `b08a70078` — clone, `cmake`, run, and you have the server we
+> and the engine is upstream `828a8082d` (`v0.2.15-nvfp4.2`) plus eleven engine-side files — clone, `cmake`, run, and you have the server we
 > benchmarked.
 >
 > **中文 —** 我们把 125B 混合 MoE 旗舰，在 POWER9 + 2017 年的 V100 老服务器上跑出了"当代推理服务器"的形态：
@@ -60,7 +60,7 @@ Capacity rule that survived every experiment: **N cards ↔ N full-window stream
 | GPU | 6× V100-16GB SXM2 · NVLink 2.0 · two NUMA islands of three cards |
 | RAM | **256 GiB real DDR** — `/proc/meminfo` over-reports (~341 GiB online); the excess is V100 HBM windows mapped into system physical address space, not RAM, and trusting it caused our early freezes |
 | Disk | Intel PM1725a NVMe |
-| Engine | exactly upstream `b08a70078` (strata 0.1.59 / `v0.2.13-nvfp4.1`) — the deliverable commit adds only [`ac922/`](ac922/README.md), zero engine diff |
+| Engine | upstream `828a8082d` (strata 0.1.61 / `v0.2.15-nvfp4.2`) + eleven engine-side files (the `STRATA_TOPK_COMPACT` QSA kernel and its parity test, one mmq/cmake line, the ppc64le ggml shims in both vendored trees) + the learned expert profile; everything else of the deliverable lives in [`ac922/`](ac922/README.md) |
 | Model | NVFP4-GPTQ pack, 17 files, sha256-manifested (`results/MODEL-SHA256SUMS.txt`) |
 
 ## Why it works — each row is a measured decision, not folklore
@@ -414,7 +414,8 @@ computed on the CPU and fetched over PCIe in parallel with the GPU, and an MTP d
 is kept as [README.upstream.md](README.upstream.md). [docs/NVFP4.md](docs/NVFP4.md) has every measurement behind this
 fork, and the upstream fork's [releases](https://github.com/sergqwer/strata-nvfp4/releases) say what changed in each.
 This repo (`ccckblaze/ac922-strata-nvfp4`) is that history plus one deliverable commit: the pinned AC922 lane in
-[`ac922/`](ac922/README.md), with no changes to the engine code at `b08a70078`.
+[`ac922/`](ac922/README.md), with the engine pinned at `828a8082d` (strata 0.1.61 / `v0.2.15-nvfp4.2`) plus the eleven
+engine-side files listed under "The machine"; the 0.1.59 → 0.1.61 adoption re-test is `ac922/PERFORMANCE.md` §7.
 
 ## Quick start
 

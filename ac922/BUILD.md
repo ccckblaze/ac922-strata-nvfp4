@@ -11,7 +11,7 @@ Toolchain that produced the final lane (all versions are what the box actually h
 | CUDA | 12.4 (`nvcc` reports `cuda_12.4.r12.4`) |
 | CMake | 3.26.5 |
 | Python (server) | 3.11.13 |
-| Engine release | strata **0.1.59** (`v0.2.13-nvfp4.1`) + the AC922 commits on top of it (`git log --oneline`) |
+| Engine release | strata **0.1.61** (`v0.2.15-nvfp4.2`) + the AC922 commits on top of it (`git log --oneline`) |
 
 ```bash
 cd <repo>
@@ -24,7 +24,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 \
       -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_Q6K_EXPERTS=ON -DSTRATA_EXPERIMENTAL_SM60=ON \
       -DSTRATA_MMQ_KQUANTS=ON -DSTRATA_MMQ_TQ_OVERLAY=ON -DSTRATA_AMD_COMMUNITY_TUNING=ON
 cmake --build build -j"$(nproc)"      # production is live: nice -n 19 ionice -c3
-./build/strata --version          # must print: strata 0.1.59
+./build/strata --version          # must print: strata 0.1.61
 ```
 
 Seven of those eight `STRATA_*` flags are already `option(... ON)`; they are spelled out because
