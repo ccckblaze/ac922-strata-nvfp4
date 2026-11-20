@@ -498,3 +498,36 @@ Switching also removed a real footgun: the reference config carried the 6-card b
 - Operations: the on-disk pool is budget-bounded and was already **99.5% full** on day one
   (`246 conversations, 521577 MiB`), so new parks evict the coldest.  Lowering `DISK_MIB`, or
   clearing `/data/cache/conv-disk/*`, costs only resurrection speed, never correctness.
+
+## Adopted: `STRATA_ADMIT_SHORT_FIRST=8192` - admission short-first (2026-11-20)
+
+- Mechanism (`serve/server.py:409-417`, boot env, **no engine flag, no numeric path**): with
+  `--batch`, new admissions take the control lines one prompt read at a time; a prompt of at most
+  this many tokens goes before longer ones still waiting, and a long prompt that has waited
+  `STRATA_ADMIT_MAX_WAIT_S` (default 30 s) counts as short, so nothing starves.
+- Measured on the shipped 4-card shape (`ac922/scripts/ttft_ab.py`: burst = 6 cold ~23K reads plus
+  one chat probe, arms in separate boots, fresh corpus slices per arm because the disk tier persists):
+
+  | arm | chat TTFT samples | median | worst | long-request wall |
+  | --- | --- | --- | --- | --- |
+  | FIFO (upstream default) | 13.7 / 39.1 / 85.6 / 90.5 s | **62.4 s** | 90.5 s | 75.1-76.8 s |
+  | short-first 8192 | 13.7 / 15.3 s (+15.7 s on the shipped boot) | **14.5 s** | 15.3 s | 84.4 s (**+10-12%**) |
+
+- Why we take it: the complaint this answers is a small request stuck behind agent-sized cold reads
+  (observed up to 90 s), and the price is ~10% wall on requests whose wall is already dominated by
+  the same shared read queue.  PP/TG **rates** are untouched - only the order of the reads changes -
+  and the probe's answer hash was identical in both arms.  Raise the cap to widen the fast lane;
+  `0` reverts to FIFO.
+- Gate: `qualgate check` on the adopted boot (det x3 + divergence probe + acc drift), plus the
+  one-round end-to-end check that the shipped `adopted-env.sh` really yields ~15 s.
+
+## Host config our numbers depend on: a per-node free reserve for the UVM/ATS path (2026-11-20)
+
+- `/etc/sysctl.d/90-ac922-numa-reserve.conf`: `vm.min_free_kbytes=1048576`,
+  `vm.watermark_scale_factor=150`.  Reason and evidence in the bring-up runbook (§330): node 8 ran to
+  0.85 GiB free and UVM's ATS fault handler, which must allocate the migration target **on the GPU's
+  own node** (`__GFP_THISNODE`), logged 782 order-0 allocation failures in ~15 minutes.
+- Not a lane knob and not optional if you want stable tails: the box has 219.5 GiB of real DIMM
+  across two nodes plus the HBM windows (`ZONE_DEVICE`, nodes 250-255 - the source of the old
+  "341 GiB" mistake), and both lanes page-lock tens of GiB.  Verified cost on our lane: engine
+  majflt unchanged, no new `allocstall_normal`.

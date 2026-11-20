@@ -694,6 +694,45 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.17 - TTFT fixed properly: admission short-first adopted, and the ATS mystery closed as "not our cards" (11-20 22:01-22:37)
+
+- Method note that paid for itself twice: before spending a boot on the `--disable-mmap` arm, checked
+  whether the flag even exists here.  It does not - this tree only has `--mmap-experts` /
+  `STRATA_ARENA_MMAP=1`, which go the *other* way (into mapped-file mode), and we run neither.  Then
+  attributed the kernel events by card: **all** 1563 `UVM GPU5 BH` bottom-half events and 781 of 782
+  allocation failures are on GPU5, a card belonging to the cooperating I2V/H3 lane.  Our GPU0-3
+  generated none.  So the leak/ATS thread is theirs, and what we owe is only the node-8 reserve
+  shipped in H.15.
+- Wave J arm 1 (`aux_cpus` request-level) closed as neutral in the same sweep of reasons: tg 66.7 vs
+  65.9 (-0.3%, sign test p=1.0) inside one boot.  The adopted -13% win was the *boot-level*
+  `--aux-cpus auto`; do not confuse the two tickets again.
+- **Adopted: `STRATA_ADMIT_SHORT_FIRST=8192`** (in `adopted-env.sh`, so both lanes get it).  Built the
+  measurement properly this time: `ttft_ab.py` fires a burst of 6 cold ~23K reads plus one chat probe
+  - a lone waiter cannot show anything, because one read is already in progress and the policy only
+  reorders requests still *queued* for the control lines.
+
+  | arm | chat TTFT | worst | long-request wall |
+  | --- | --- | --- | --- |
+  | FIFO (upstream default) | 13.7 / 39.1 / 85.6 / 90.5 s -> median 62.4 | 90.5 s | 75.1-76.8 s |
+  | short-first 8192 | 13.7 / 15.3 s -> median 14.5 | 15.3 s | 84.4 s (+10-12%) |
+
+  Same corpus length class, disjoint slices per arm (the disk tier persists across boots, so reusing
+  text would have measured resurrection instead of queueing), one process per run.
+- A measurement-integrity catch worth the noise: the first CTL run wrote **two interleaved SUMMARY
+  lines** into one log - two harness processes with identical arguments, i.e. twelve queued reads
+  instead of six.  Every CTL number from that file is inflated.  It was renamed to
+  `ttft-ctl.log.duplicate-load` and the arm re-run clean; the lesson is to count the harness's own
+  processes before believing a queue-depth result (`pgrep -c` self-matches through `bash -c`, so match
+  the interpreter line instead).
+- Verification of the shipped state, not just the experiment: the adopting boot reports
+  `STRATA_ADMIT_SHORT_FIRST=8192` in the server's own environment, GEOMETRY-PASS, and a fresh
+  one-round check lands TTFT **15.7 s** - on the arm's side, not FIFO's.  Probe answer hash
+  `5e71fa063c` identical across every arm and round, so the policy changes order, not output.
+  `qualgate check` running against REF.json on the adopted boot.
+- Cost stated plainly: long prompts give up ~10-12% of their wall clock, bounded from below by the
+  30 s anti-starvation rule (a long read that waited longer counts as short).  For this box that is
+  the right direction: the queue was hurting the small interactive request by up to 90 s.
+
 ### H.16 - Wave J arm 1 closed as neutral, and the cold tier's live-chain rule found in a routine sweep (11-20 21:42-21:5x)
 
 - `strata_tune.aux_cpus=0|1`, paired **inside one boot** on production (`abreq.py t9 5`, 8K context,
@@ -765,7 +804,12 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   ~10.5 ms/window, GPU-reach ~3.1 ms/window) and on the still-unexplained cold-PP p10 tail (-39%,
   which H.14 showed is *not* admission queueing) are the pool itself.  Arms, cheapest first, all
   read out of `src/kernels/cpu/pool.cpp` / `generate.cpp` so no arm is guessed at:
-  0. `--disable-mmap` single-variable arm - **promoted by H.15 to the discriminating experiment**:
+  0. ~~`--disable-mmap` single-variable arm~~ **reclassified by H.17 - not applicable to this lane**:
+     the tree has no such flag (only `--mmap-experts` and `STRATA_ARENA_MMAP=1`, both of which *enter*
+     mmap mode, and we run neither), and every one of the 1563 UVM bottom-half events / 781 allocation
+     failures was on **GPU5**, a co-tenant card - our GPU0-3 produced zero.  The ATS/mmap question is
+     now the H3 lane's to answer; ours stays "keep node 8's reserve healthy".
+  0b. (was arm 0) `--disable-mmap` single-variable arm - **promoted by H.15 to the discriminating experiment**:
      if the ATS migration failures (runbook 330) and the remote-read penalty both disappear, the
      leak/tail attribution locks on the mmap/ATS path instead of our swap-in logic.  Cost: one extra
      copy and a slower load; benefit: the ATS migration source is off.  One boot.
