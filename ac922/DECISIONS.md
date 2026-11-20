@@ -531,3 +531,15 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   across two nodes plus the HBM windows (`ZONE_DEVICE`, nodes 250-255 - the source of the old
   "341 GiB" mistake), and both lanes page-lock tens of GiB.  Verified cost on our lane: engine
   majflt unchanged, no new `allocstall_normal`.
+
+## Rejected — CPU-pool placement knobs (Wave J, 2026-11-21, 4-card deep window)
+
+| Knob | Idea | Measured | Verdict |
+| --- | --- | --- | --- |
+| `STRATA_POOL_CORES=4-84:4,88-128:4` | put 21 of 32 workers on node 0 to match the arena's 0.69 NUMA cut (compute follows data) | tg 74.3 -> 71.6 (-3.6%), negative in all three paired same-base rounds | **rejected**; task routing does not scale with slice bytes the way the rebalance assumed |
+| `STRATA_POOL_SPIN_US=200000` | the default 20 ms park is shorter than a ~30 ms decode window, so keep workers hot across windows | msw -3.6% but tokens/window -8%, net tg -4.8%; output hash moved (not bit-exact) | **rejected**; the sleep/wake cost the idea targets is not where the time goes |
+| `STRATA_NUMA_POOL=0` | audit: is the auto per-node pool split paying or costing? | verify +8%, host-CPU experts 2.1x worse | **confirms the default** - the split earns; leave it on |
+
+Also from the same wave: the "10.5 ms/window host-CPU experts" figure we carried is the
+*cold-adaptation* number; warmed it is 2-3 ms/window, so the remaining deep-window cost is the
+sm70 expert product itself (verify minus reach ~22 ms), which no pool knob touches.

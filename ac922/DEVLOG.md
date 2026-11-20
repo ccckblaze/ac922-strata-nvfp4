@@ -694,6 +694,46 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.18 - Wave J closed: the CPU pool's own shape is already tuned, and the deep-window `tg` finally measured (11-20 23:44 -> 11-21 00:45)
+
+- Three boot-level pool tickets, one variable per boot, deep window (~165K prompt, ~290 tokens
+  decoded, fresh corpus base per arm):  **J1** `STRATA_POOL_CORES=4-84:4,88-128:4` (rebalance the
+  32 workers 21/11 to match the arena's NUMA split 0.69 - the compute side of the T10 idea),
+  **J2** `STRATA_POOL_SPIN_US=200000` (the default 20 ms park is shorter than a 30 ms decode
+  window, so workers were sleeping and waking every window), **J3** `STRATA_NUMA_POOL=0` as a
+  pricing audit of the auto per-node slices.
+- All three lose or confirm the default.  With the parse bug fixed the primary metric became
+  `tg = 1000 * tokens-per-window / ms-per-window` read from the engine's own decode-timing line:
+  control (default env, base 12.6M) tg 74.3 / msw 30.68 / verify 26.55 / CPU-experts 3.27;
+  J1 tg 71.6 (**-3.6%**, negative in *all three* paired rounds 56.8/59.7, 71.6/74.3, 78.1/81.2);
+  J2 tg 70.7 (-4.8% net - msw did improve ~4% but tokens/window fell ~8%, and the arm is not
+  bit-exact); J3 (first pass, pre-fix scale) verify +8%, CPU-experts 2.1x worse - the auto NUMA
+  split is *earning*, not costing.  Nothing adopted; production defaults stand.
+- Same-base across boots is legitimate here and worth remembering why: live chains are **never**
+  written to the disk tier (H.16), and a restart clears the RAM cache, so an identical corpus base
+  produces an identical *cold* prompt after every boot - the three arms' R0/R1 prompt hashes
+  matched exactly, which is what makes the per-round pairing meaningful.
+- First clean view of what a deep window is actually made of, post-adaptation: msw ~30 ms =
+  verify ~26.5 (GPU-reach 4.2 + CPU-experts 2-3 + the rest is sm70 expert math itself)
+  + draft ~2.6 + adapt wait/join ~1.7 + commit ~0.5.  The "10.5 ms/window host-CPU experts"
+  number we carried was the *cold-adaptation* figure; warmed it is 2-3 ms, so the cheap
+  host-side handles are mostly gone - the remaining block is the expert product on tensor-core-less
+  sm70, i.e. only QPN2/tensorfold touches it, and that is the sister-tree project with its own
+  negative serving record.
+- Cross-boot determinism caveat, recorded honestly: temp=0 and same prompt, yet R2's *output*
+  hash differed in all three arms (R0/R1 matched).  Deep-window tails drift across boots because
+  adaptation changes which experts are resident, which changes fp32 accumulation order.  In-boot
+  det is untouched (gate below); "det x3" is a same-boot guarantee only.
+- Quality gate after seven reboots in ~90 minutes: `qualgate baseline` rewritten and `check`
+  **PASS** (det x3 `bfd40ecd4692` unchanged, the same cell as the pre-Wave-J REF).  Four
+  relay-cell drift warnings + acc-drift 0.911 are consistent with the disk tier being 99.5%
+  full (246/250 chains) - the sizing decision stays with the operator, now with a measured
+  consequence attached.
+- Harness landed in the repo: `ac922/scripts/deepprobe.py` (numbers and hashes only; one process
+  at a time).  Its first-pass bug - `tokens/window` and `ms/window` carry their number *before*
+  the pattern - silently produced `tg: null` for a whole wave and nearly mis-killed J1 on the
+  noisier `cpu` column; the <4 ms/window rule from METHODOLOGY is what kept the verdict honest.
+
 ### H.17 - TTFT fixed properly: admission short-first adopted, and the ATS mystery closed as "not our cards" (11-20 22:01-22:37)
 
 - Method note that paid for itself twice: before spending a boot on the `--disable-mmap` arm, checked
