@@ -607,6 +607,41 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   draft ~3.1, commit ~0.5.  2.07 tokens/window at T~2.8 reads ~42 tok/s for the probe's batched
   mix - decode-rate ceiling work should now be argued against these lines, not the sister's.
 
+### H.13 - card-4 orphan context, the full-GPU reset, and the "reset broke CUDA enumeration" trap (11-20 18:0x-18:5x)
+
+- Symptom first, because it reads like nothing: card 4 climbed **736 MiB -> 12658 -> 14822** with
+  **no entry in `--query-compute-apps`**, lane healthy, engine log quiet.  A context the driver
+  refuses to drop, not an allocation we made.  Card 5 trailed at 1594.  Operator called for a
+  full reset (3/4/5 needed together to release it).
+- Reset procedure that worked: `lane.sh 4 stop` -> stop `nvidia-persistenced` -> loop
+  `nvidia-smi --gpu-reset -i 0..5` -> restart persistenced.  All six cards to 0 MiB, confirming the
+  leak was driver-held.  Note the NVLink-group quirk: resetting one SXM2 reports it reset a *peer*
+  GPU - normal, not a wrong index.
+- The trap cost two boots: after the reset `nvidia-smi -L` listed all six cards, but the engine
+  self-report degraded to `--layer-split ... (1..0; ...)` - **the CUDA driver API enumerated zero
+  devices** while nvidia-smi looked perfectly healthy.  `dmesg` explained it: a kernel oops in
+  `nv_close_device` (trace 2d9a421308504ab4) - the reset's own handle-close path corrupted module
+  state.  Lesson recorded in runbook 328: *nvidia-smi health is not evidence CUDA works*; the only
+  cheap check before burning a two-minute load is whether the split line reads
+  `layers 0-8 (CUDA0) ...`.
+- Recovery without a reboot (one shot): stop persistenced -> `rmmod nvidia_uvm nvidia_drm
+  nvidia_modeset nvidia` -> `modprobe nvidia_uvm` (+`nvidia_drm`) -> start persistenced -> lane
+  start.  18:49:54 boot came up `GEOMETRY-PASS 4 cards, 2 groups of 2`, health 200 after 90 s,
+  cards 0-3 ~14.5 GiB each, cold-tier block and the 4-card `STRATA_DECODE_TIMING=1` intact,
+  smoke answer hashed (8 tokens / 0.96 s).
+- Post-reset sentinel (24 h, n=2697 request lines / 71353 windows): mswin median 22.21 ms,
+  tg 47.30, verify 20.92, GPU-reach 3.13, host 0.07, cpu 1.44 - same book as before the reset, so
+  the recovery introduced no regression.  Cards 4/5 afterwards belong to the other thread's
+  H3/ComfyUI (pid 749782, :8188) at ~306 MiB/card: real tenant, not a leak, leave alone.
+- Three standing disciplines adopted by the operator (verbatim in runbook 328): no long-arm
+  launches from an interactive ssh session (`setsid`+`nohup`+pidfile, session death == orphan ==
+  leak); no HMM oversubscription to rescue an OOM outside the certified geometry (it turns a 3 s
+  failure into 18 min of thrash and can die inside the handler); after a card recovery, run one
+  single-variable `--disable-mmap` arm - costs a copy and slower load, removes the ATS migration
+  source.  That arm is also the cheapest probe for tonight's still-unattributed leak, and a
+  cards-4/5 orphan-context watchdog (3 samples >1 GiB with an empty process table -> alert) is the
+  obvious sentinel extension.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
