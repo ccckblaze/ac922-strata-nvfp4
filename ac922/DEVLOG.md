@@ -741,6 +741,10 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   ~10.5 ms/window, GPU-reach ~3.1 ms/window) and on the still-unexplained cold-PP p10 tail (-39%,
   which H.14 showed is *not* admission queueing) are the pool itself.  Arms, cheapest first, all
   read out of `src/kernels/cpu/pool.cpp` / `generate.cpp` so no arm is guessed at:
+  0. `--disable-mmap` single-variable arm - **promoted by H.15 to the discriminating experiment**:
+     if the ATS migration failures (runbook 330) and the remote-read penalty both disappear, the
+     leak/tail attribution locks on the mmap/ATS path instead of our swap-in logic.  Cost: one extra
+     copy and a slower load; benefit: the ATS migration source is off.  One boot.
   1. `--aux-cpus` **request-level** (`generate.cpp:1506`: a request's `strata_tune` `aux_cpus=0|1`
      beats the boot flag) - the only arm in this family that can be paired **within one boot**,
      which the <4 ms/window cross-boot rule demands.  Alternate with `abreq.py`-style rounds.
