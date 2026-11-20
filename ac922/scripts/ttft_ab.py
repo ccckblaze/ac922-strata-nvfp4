@@ -10,7 +10,7 @@ needs a quality gate - but the answer hash is printed to show the small request 
 Usage (always detached, never from a bare interactive ssh per runbook 328):
   setsid nohup bash -c "python3.11 ac922/scripts/ttft_ab.py 5 240000 1.5 arm-ctl > /tmp/ttft-ctl.log 2>&1" &
   SB_URL=http://127.0.0.1:8093 ...          # dev lane: point at its port
-Args: rounds big_chars lag_seconds tag
+Args: rounds big_chars lag_seconds tag base_offset
 Prints numbers and hashes only - never model text.
 """
 import hashlib
@@ -99,11 +99,16 @@ def main():
     tag = sys.argv[4] if len(sys.argv) > 4 else "arm"
     raw = open(CORPUS, encoding="utf-8", errors="replace").read()
     global START
-    print(f"TTFT-AB tag={tag} rounds={rounds} big_chars={chars} lag={lag} url={URL}", flush=True)
+    base = int(sys.argv[5]) if len(sys.argv) > 5 else 0
+    print(f"TTFT-AB tag={tag} rounds={rounds} big_chars={chars} lag={lag} base={base} url={URL}", flush=True)
     tts, tws, bws, ptrs = [], [], [], []
     for i in range(rounds):
-        # a fresh slice each round keeps the long prompt cold; +1M guard against re-use within the file
-        slice_ = raw[(i * chars + (hash(tag) % 50) * 1000) % max(1, len(raw) - (rounds + 1) * chars):][:chars]
+        # a fresh slice each round keeps the long prompt cold.  The arm's own base offset keeps two
+        # boots from sharing text: with DISK_PERSIST the conversation-disk tier survives a restart, so
+        # the second arm would resurrect the first arm's chains instead of reading them cold.
+        # (Never Python's hash() here - it is salted per process, so an arm would not be reproducible.)
+        start = base + i * chars
+        slice_ = raw[start % max(1, len(raw) - chars):][:chars]
         res = [None]
         START[0] = time.monotonic()
         th = threading.Thread(target=big, args=(slice_, res, 0))
