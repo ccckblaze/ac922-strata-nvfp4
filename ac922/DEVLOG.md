@@ -642,6 +642,57 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   cards-4/5 orphan-context watchdog (3 samples >1 GiB with an empty process table -> alert) is the
   obvious sentinel extension.
 
+### H.14 - three ladder tickets, two killed by geometry gates before spending a boot (11-20 19:42-20:15)
+
+- Method upgrade worth keeping: read the engine's own **refusal line** before spending a restart.
+  Two of the three levers died on paper and saved ~6 boots.  New standing rule for any
+  "env-Flag-boost" ticket: grep its off-gate, boot once only if the gate can pass.
+- `STRATA_ADAPT_FETCH` - dead, not untuned.  Our fork's default is already **2**
+  (`generate.cpp:2337`); the production boot prints `STRATA_ADAPT_FETCH is off (a layer split)`,
+  gated at `generate.cpp:15075` (`multi_gpu || !stages.empty()`), and we additionally match the
+  "resident RAM mode" reason.  The author's comment explains why: under a split, verifiers mutate
+  `host_res` inside a window while pipelined groups upload, so admission-style swap-in is refused.
+  Same family, same verdict: `adaptive overlap: off: not on a layer split`.
+- `STRATA_EXCHANGE_ROTATE=1` - rejected, mutually exclusive with the NUMA pool.  Rotation itself
+  qualifies on this box (`exchange buffer rotation enabled: 96 buffers ... no host commit memcpy`),
+  but `pool.cpp:623` feeds the flag into `decide_numa_split`, and the boot then prints `NUMA pool
+  off: ... moves experts between slots, the split needs fixed slots`.  Our lane guard caught it:
+  `GEOMETRY-FAIL the NUMA cpu pool did not come up`.  Shallow-window probe (2 clean reps/arm):
+  mswin 25.04 -> 25.03, reach 3.72 -> 3.67, **cpu 2.18 -> 2.59 (+19%)**, tg -2.6%.  The memcpy we
+  save does not show; the pool we lose already does - and the pool serves our biggest open item
+  (deep-window host-CPU experts, 10.5 ms/window).
+- `STRATA_COALESCE_PREFILL=4` - true negative, mechanism proven firing.  Trap recorded: the
+  default `STRATA_COALESCE_TOKENS` is **16384**, which silently excludes long prompts from the
+  co-read, so a naive test measures the config, not the idea.  Raised to 200000, the boot logged
+  `coalesce: 3 waiting prompt(s) (149101 tokens) read with this request's 49646`.  Paired cold
+  bursts (non-overlapping slices, offsets changed per boot to dodge the persisted disk tier):
+
+  | arm | conc | ptok each | wall | aggregate |
+  | --- | --- | --- | --- | --- |
+  | default, synth 50K | 1 | 49.8K | 19.6 s | **2518 tok/s** |
+  | default, synth 50K | 4 | 49.8K | 79.9 s | 2474 tok/s |
+  | coalesce, synth 50K | 4 | 49.7K | 79.0 s | 2499 tok/s |
+  | coalesce, natural ~44K | 4 | 43.9K | 83.8 s | 2095 tok/s |
+  | default, natural ~43K | 4 | 43.5K | 78.9 s | **2206 tok/s** |
+  | default, natural | 1 | 36.5K | 17.6 s | 2075 tok/s |
+
+- The read that matters: **4-way aggregate == one stream**, `tail_ratio` 1.00 everywhere.  Cold PP
+  is a pipeline-throughput ceiling (~2100-2500 tok/s on 4 cards), not a per-read overhead, so
+  merging the reads moves nothing; and by the same arithmetic `replicas` cannot raise PP aggregate
+  either - it buys concurrency and TTFT isolation, not prefill throughput.  Corollary correction:
+  the old "cold PP p10 -39% tail" is not queue contention (bursts show no tail at all) - source
+  still open, likely the shared-CPU/NVLink tenant family (T10).
+- Ladder after this wave: to move cold PP we must reduce compute per token (SpecPrefill, path 6)
+  or raise per-card math (QPN2/tensorfold - still absent from our tree, sister-port work).  For TG
+  the remaining untested handles are NUMA affinity itself (`STRATA_NUMA_POOL` split, `--aux-cpus`)
+  and the resident ratio; ADAPT_FETCH / ROTATE / ADAPT_OVERLAP are geometry-locked.
+- Next boot-costed ticket queued: `STRATA_ADMIT_SHORT_FIRST=<tokens>` (`server.py:409-417`, default
+  0 FIFO, `ADMIT_MAX_WAIT_S=30` anti-starvation) - a TTFT/fairness ticket for exactly the mixed
+  length traffic the operator complained about, not a throughput ticket.
+- Handback: default production boot 20:08:58 (pid 799119), GEOMETRY-PASS, cold tier + floor +
+  decode-timing all self-reported, zero experiment flags in `/proc/<pid>/environ`, probe env files
+  deleted.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
