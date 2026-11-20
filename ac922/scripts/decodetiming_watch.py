@@ -9,6 +9,7 @@ each run reads only new bytes.  Numbers only - never any model text.
 Rows land in /data/work/decodetiming/rows-YYYYMM.jsonl; the watermark is /data/work/decodetiming.pos
 """
 import json, os, re, statistics, sys, time
+import fcntl
 
 ENG = os.environ.get("ENGINE_LOG", "/data/champion/strata-nvfp4-engine.log")
 DIR = os.environ.get("DT_DIR", "/data/work/decodetiming")
@@ -24,6 +25,15 @@ LINE_RE = re.compile(
     r"(?P<adapt_join>" + NUM + r")")
 
 def scan():
+    # a single in-place lock: `systemctl enable --now` of the timer can fire the service the moment
+    # it starts (OnBootSec counts from boot, and the box has been up for days), racing a manual run
+    # into a double-scan of the same byte range.
+    os.makedirs(DIR, exist_ok=True)
+    lock = open(os.path.join(DIR, "watch.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
     pos = 0
     if os.path.exists(POS):
         pos = int(open(POS).read().strip())
