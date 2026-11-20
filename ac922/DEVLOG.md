@@ -572,6 +572,25 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
 - Production restored: `GEOMETRY-PASS 6 cards (0,1,2,3,4,5), 3 groups of 2, shim loaded`,
   `/health` loaded with images, cards 4/5 back in the lane.
 
+### H.11 - the conversation-disk cold tier shipped: plan v2 executed end to end (11-20 11:40-12:35)
+
+- Phase A (coexistence gate) passed on the forced shape (CC 2 GiB, park >=16384): disk-hit line
+  `64745 tokens, 1172 MiB in 4 files, 592 ms (2076 MB/s)`, reused 99.97%, and two
+  eviction-resurrection cycles return bit-identical answers.  Near-miss worth remembering: the
+  determinism check compared **empty strings** until the response field was fixed - this lane
+  answers in `reasoning_content`, `content` is empty; any future hash-the-answer harness must
+  concatenate both fields (the phaseA2 rerun is the citable one).
+- Phase B shipped the production block (CC 49152 untouched, disk 512 GiB, persist, sync 30,
+  min-tokens 32768, `--memory-limit-mib 262144` + dynamic floor 52428 from REAL 262144).  The
+  mem-limit pin is what makes the floor honest on a box whose MemAvailable is inflated by the
+  HBM-window mapping - the 341 GiB trap, finally given its official antidote.
+- Phase C verdict: 16 x 148K resurrections, median wall **6.9 s** (gate 11), COLD 0, 8 RAM + 8
+  disk hits - the tier splits the load exactly as the budget math predicted.  One real finding:
+  a cold-prefill storm can outrun the idle-sync write queue and evict a not-yet-persisted newest
+  chain (that resurrection fell to cold, 94 s); with the snapshot on disk, the same injection
+  under concurrency costs 1.3 s.  Scheduler-side ticket, no numbers path touched.
+- Handback: test dirs purged, production boot at 12:26, GEOMETRY-PASS, QUALGATE-PASS.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama

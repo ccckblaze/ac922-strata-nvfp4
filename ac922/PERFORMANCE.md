@@ -415,3 +415,27 @@ burst, published `sum_tg` caliber): 4-card boots `cutover061` (15:38) and `repan
 - Left open by this round: full-suite GSM8K / MATH500 / HumanEval on 0.1.61, the `sbench long`
   ladder on the new engine (today's numbers are `aggbench` caliber; §6e.1's ladder is 0.1.59),
   and the 8K×6 median band (±12%) still needs a third 6-card boot to tighten.
+
+## 8. Conversation-disk cold tier — adopted (2026-11-20)
+
+What: evicted parked conversations go to NVMe and are read back on the next turn instead of being
+re-prefilled.  Engine flags (`--conversation-disk-*`, `--conversation-cache-min-free-mib`,
+`--memory-limit-mib`) are upstream since the 0.2.15 line; this lane wires them through env only
+(`scripts/strata-nvfp4-run.sh` passthrough, `lane.env` production block) — zero engine-code change,
+rollback = delete the block.
+
+Production shape: CC 49152 unchanged · disk budget 512 GiB (`/data/cache/conv-disk`, ttl 0 = budget
+eviction only, persist on, idle sync 30 s) · park only ≥32768 tokens · RAM floor 52428 MiB computed
+from REAL 262144 · `--memory-limit-mib 262144` pins the engine's RAM view (MemAvailable on this box
+is over-reported by the HBM-window mapping; without the pin the floor is weaker than it looks).
+
+Measured (4-card boots, `phaseA/phaseC` harnesses, `AC922-bringup-runbook.md` §327):
+- parked footprint ≈1.2-1.6 GiB per 64K conversation (~0.02 MB/token — tail state, not the full KV);
+- resurrection wall at scale: 16 × 148K conversations, CC exactly saturated → **median 6.9 s**
+  (gate ≤11 s), **COLD = 0**, 8 RAM hits + 8 disk hits, NVMe read-back ~2.1 GB/s;
+- cold prefill of the same depth is 46 s — the disk tier buys ~6.6× on the evicted half;
+- gates: `QUALGATE-PASS` (det ×3 + acc-drift) on both the test boot and the shipped boot;
+  follow-up answers are bit-identical across two eviction-resurrection cycles.
+- known edge (open ticket, scheduler-side): a cold-prefill storm can race the write queue — the
+  most recent chain may not be on disk yet when it is evicted, and that one resurrection falls to
+  cold (94 s).  With the snapshot on disk, resurrection under concurrency costs 1.3 s.
