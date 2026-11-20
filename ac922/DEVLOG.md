@@ -694,6 +694,30 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.16 - Wave J arm 1 closed as neutral, and the cold tier's live-chain rule found in a routine sweep (11-20 21:42-21:5x)
+
+- `strata_tune.aux_cpus=0|1`, paired **inside one boot** on production (`abreq.py t9 5`, 8K context,
+  512 new tokens, alternating): tg 66.7 vs 65.9 (**-0.3%**, sign test p=1.0), wall +0.1%, draft
+  acceptance unchanged.  Neutral, closed, no boot owed.  The distinction that matters: the adopted
+  H2 win was the **boot-level** `--aux-cpus auto` (-13% wall); the request-level toggle is a
+  different ticket and it is empty here.  Harness note: `abreq.py` carried no `Authorization` header
+  and 401'd once the lane required a key - any harness pointed at production must fetch the key from
+  `/proc/<engine>/environ` (now patched in place).
+- Routine log sweep (the standing "analyse on every handback" rule) turned up a rule that rewrites a
+  §327 open edge: `idle save ... parked conversations only: **the live one cannot be saved with a
+  layer split, --peer-device or --batch**`.  Production matches both, so a chain evicted while still
+  being served has no on-disk snapshot - which is exactly why that one resurrection went cold (94 s).
+  It was never a write-queue race, so lowering `DISK_SYNC` is the wrong lever; the right levers are
+  admission-side (do not evict a live chain) and the shape trade is one we are not making.  Added to
+  DECISIONS with the test rule: let the chain park before measuring resurrection.
+- Same sweep: the disk pool hit **99.5% of its 512 GiB budget on day one** (246 conversations,
+  521577 MiB, ~2.07 GiB each - my own burst corpus filled it), so new parks now evict the coldest.
+  Not a correctness issue; a capacity decision to revisit when the NVMe is needed for images/models.
+- Host after §330: allocation-failure count frozen at 782, `allocstall_normal` still 1, node 8 idle
+  holding 4.31 GiB (above the new 4.2 GiB high watermark), engine majflt flat at 5376, zero engine
+  restarts inside this boot.  Only recurring warning remains `NUMA placement FAILED ... no per-role
+  byte sizes`, whose cure (weighted placement, needs pack metadata) is queued behind Wave J.
+
 ### H.15 - the WAN outage was not a host outage: node 8 ran dry and UVM's ATS migration could not get a single page (11-20 21:33-21:5x)
 
 - 20:2x-21:33 every path to the box was dead (WAN, internal, jump, BMC - 100% packet loss).  When

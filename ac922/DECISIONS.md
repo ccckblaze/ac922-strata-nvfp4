@@ -477,3 +477,24 @@ Switching also removed a real footgun: the reference config carried the 6-card b
 - **Not changed by this decision.** Nothing about geometry, exports, or model assets; the switch is
   binary provenance only, and it still has to clear the full gate set (`qualgate check`, acc-drift,
   det x3, 4x full window, GEOMETRY-PASS) before the numbers in `PERFORMANCE.md` stay valid.
+
+## Adopted: the conversation-disk cold tier (RAM floor + on-disk parking), with a geometry caveat (2026-11-20)
+
+- Shipped as pure launcher/env on top of upstream's `--conversation-disk-*` five flags
+  (`runbook §327`): `DISK_MIB=524288`, `DISK_TTL=0`, `DISK_PERSIST=1`, `DISK_SYNC=30`,
+  `CC_MIN_TOKENS=32768`, plus `--memory-limit-mib 262144` and a dynamic
+  `--conversation-cache-min-free-mib` floor of `max(20% x REAL_RAM, 16 GiB)` = 52428 MiB.
+  The mem-limit pin is the official antidote to the inflated `MemAvailable` on this box
+  (the HBM-window mapping; see the 341 GiB caliber note).
+- Measured: 16 x 148K mutually distinct chains, parked under a full CC, resurrect at median
+  **6.9 s** wall with **0 cold recomputes**, split ~50/50 between RAM and disk hits, disk read-back
+  ~2 GB/s.  No PP/TG/VRAM regression, so it is a pure time-for-capacity trade at zero numeric cost.
+- **Caveat that changes how it must be tested** (engine's own words, `runbook §331`):
+  `parked conversations only: the live one cannot be saved with a layer split, --peer-device or
+  --batch`.  Our shape matches both, so a chain that is evicted **while still being served** has no
+  snapshot at all - that, not a write-queue race, is why one §327 resurrection fell to cold (94 s).
+  Consequences: shrinking `DISK_SYNC` will not fix it, and any harness measuring resurrection
+  benefit must let the target chain become parked (wait one idle-save window) before evicting it.
+- Operations: the on-disk pool is budget-bounded and was already **99.5% full** on day one
+  (`246 conversations, 521577 MiB`), so new parks evict the coldest.  Lowering `DISK_MIB`, or
+  clearing `/data/cache/conv-disk/*`, costs only resurrection speed, never correctness.
