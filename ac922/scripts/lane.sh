@@ -13,12 +13,14 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-LANE_ENV=${LANE_ENV:-/data/work/lane.env}          # machine layout: AC922_ROOT/SRC/MODEL_DIR/LOGD/RUN_JSON/PIDF
-[ -f "$LANE_ENV" ] && . "$LANE_ENV"
 RUN="$HERE/strata-nvfp4-run.sh"
 ENV_SH=${ENV_SH:-/etc/profile.d/env.sh}
 [ -n "${STRATA_API_KEY:-}" ] || { [ -f "$ENV_SH" ] && . "$ENV_SH"; }
 CARDS=${1:-}; ACTION=${2:-start}; shift 2 2>/dev/null || true
+# lane.env is sourced only after CARDS is parsed, so machine-local lines can branch on the card
+# count (e.g. `[ "${CARDS:-}" = "4" ] && export STRATA_DECODE_TIMING=1` on the 4-card lane).
+LANE_ENV=${LANE_ENV:-/data/work/lane.env}          # machine layout: AC922_ROOT/SRC/MODEL_DIR/LOGD/RUN_JSON/PIDF
+[ -f "$LANE_ENV" ] && . "$LANE_ENV"
 STATE=${STATE:-/tmp/strata-nvfp4-lane.state}       # engine-log byte offset of the boot we started
 REANCHOR=0
 for a in "$@"; do [ "$a" = "--reanchor" ] && REANCHOR=1; done
