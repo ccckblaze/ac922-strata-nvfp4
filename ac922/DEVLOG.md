@@ -591,6 +591,22 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   under concurrency costs 1.3 s.  Scheduler-side ticket, no numbers path touched.
 - Handback: test dirs purged, production boot at 12:26, GEOMETRY-PASS, QUALGATE-PASS.
 
+### H.12 - decode timing is on by default in the 4-card lane, and our own window breakdown lands (11-20 13:5x-14:1x)
+
+- `STRATA_DECODE_TIMING=1` now ships in the 4-card production env (lane.env line branching on
+  `CARDS`; the 6-card lane untouched).  Cost audit first: the flag reads counters the engine
+  already keeps and prints one stderr line per request - no diagnostic kernels, no added sync
+  (the round-cost-ledger discipline applies to a different mechanism).
+- The fix that made it stick: `lane.sh` sourced `lane.env` *before* parsing `$1`, so a
+  card-count-conditional export silently saw an empty `CARDS`.  Source moved after the parse
+  (nothing between the two lines consumes SRC/MODEL_DIR).  First boot after the flip printed
+  `0` for the flag in `/proc/<pid>/environ`; second printed `1` and the timing lines flow.
+- Our own numbers, first sight (previously everything was borrowed from the sister box):
+  ~49 ms/window, verify ~45 of it, **GPU-reach wait 4.5 ms/window** - the host-wait 26% family
+  confirmed on this machine, not just in sister accounting; per-layer host CPU ~22 ms/window,
+  draft ~3.1, commit ~0.5.  2.07 tokens/window at T~2.8 reads ~42 tok/s for the probe's batched
+  mix - decode-rate ceiling work should now be argued against these lines, not the sister's.
+
 ## Deferred to an evening window (operator uses the box by day)
 
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
