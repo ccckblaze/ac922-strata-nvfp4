@@ -8,9 +8,16 @@ the medians.  It measures wall time in the admission queue, not the numbers path
 needs a quality gate - but the answer hash is printed to show the small request was really served.
 
 Usage (always detached, never from a bare interactive ssh per runbook 328):
-  setsid nohup bash -c "python3.11 ac922/scripts/ttft_ab.py 5 240000 1.5 arm-ctl > /tmp/ttft-ctl.log 2>&1" &
-  SB_URL=http://127.0.0.1:8093 ...          # dev lane: point at its port
-Args: rounds big_chars lag_seconds tag base_offset
+  setsid nohup bash -c "python3.11 ac922/scripts/ttft_ab.py 3 120000 1.0 arm-ctl 0 4 2 > /tmp/ttft-ctl.log 2>&1" &
+  SB_URL=http://127.0.0.1:8092 ...          # dev lane: point at its port
+  The env must be set on the **server** process, not here: STRATA_ADMIT_SHORT_FIRST is read at
+  serve boot (devlane.sh inherits the caller's env), so run one arm per lane boot.
+Args: rounds big_chars lag_seconds tag base_offset n_big n_small
+
+Why n_big > 1: short-first cannot help a lone waiter - one read is already in progress and the
+policy only reorders requests that are still *waiting* for the control lines.  A burst of several
+long cold prompts plus a chat probe is the shape where the policy shows up.
+
 Prints numbers and hashes only - never model text.
 """
 import hashlib
@@ -93,49 +100,61 @@ def big(text, res, i):
 
 
 def main():
-    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-    chars = int(sys.argv[2]) if len(sys.argv) > 2 else 240000
-    lag = float(sys.argv[3]) if len(sys.argv) > 3 else 1.5
+    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    chars = int(sys.argv[2]) if len(sys.argv) > 2 else 120000
+    lag = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
     tag = sys.argv[4] if len(sys.argv) > 4 else "arm"
-    raw = open(CORPUS, encoding="utf-8", errors="replace").read()
-    global START
     base = int(sys.argv[5]) if len(sys.argv) > 5 else 0
-    print(f"TTFT-AB tag={tag} rounds={rounds} big_chars={chars} lag={lag} base={base} url={URL}", flush=True)
+    nbig = int(sys.argv[6]) if len(sys.argv) > 6 else 4
+    nsmall = int(sys.argv[7]) if len(sys.argv) > 7 else 2
+    raw = open(CORPUS, encoding="utf-8", errors="replace").read()
+    span = len(raw) - (nbig + 1) * chars
+    print(f"TTFT-AB tag={tag} rounds={rounds} big_chars={chars} lag={lag} base={base} "
+          f"nbig={nbig} nsmall={nsmall} url={URL}", flush=True)
     tts, tws, bws, ptrs = [], [], [], []
     for i in range(rounds):
-        # a fresh slice each round keeps the long prompt cold.  The arm's own base offset keeps two
-        # boots from sharing text: with DISK_PERSIST the conversation-disk tier survives a restart, so
-        # the second arm would resurrect the first arm's chains instead of reading them cold.
-        # (Never Python's hash() here - it is salted per process, so an arm would not be reproducible.)
-        start = base + i * chars
-        slice_ = raw[start % max(1, len(raw) - chars):][:chars]
-        res = [None]
+        # a fresh slice per prompt keeps every long request cold.  base separates the two arms:
+        # with DISK_PERSIST the conversation-disk tier survives a lane restart, so an arm reusing
+        # the other's text would resurrect chains instead of reading them cold.  (Never Python's
+        # hash() for this - it is salted per process, so an arm would not be reproducible.)
+        res = [None] * nbig
+        ths = []
         START[0] = time.monotonic()
-        th = threading.Thread(target=big, args=(slice_, res, 0))
-        th.start()
-        time.sleep(lag)
-        small = {"model": MODEL, "messages": [{"role": "user", "content": SMALL}],
-                 "temperature": 0, "max_tokens": SMALL_NEW, "stream": True,
-                 "stream_options": {"include_usage": True}}
-        try:
-            out, wall, ttft = post(small, stream=True)
-        except Exception as exc:                                # noqa: BLE001
-            th.join()
-            print("SMALL-ERR", i, repr(exc)[:90], flush=True)
-            continue
-        th.join()
-        ptok, bwall = res[0] if res[0] else (-1, 0)
-        h = hashlib.sha256((out.get("content", "") + out.get("reasoning_content", "")).encode()).hexdigest()[:10]
-        ntok = (out.get("usage") or {}).get("completion_tokens", 0)
-        tts.append(ttft or 0); tws.append(wall); bws.append(bwall); ptrs.append(ptok)
-        print(f"R{i} big_ptok={ptok} big_wall={bwall:.1f}s small_ttft={ttft}s small_wall={wall}s "
-              f"small_ctok={ntok} ans={h}", flush=True)
+        for b in range(nbig):
+            start = (base + i * nbig * chars + b * chars) % max(1, span)
+            t = threading.Thread(target=big, args=(raw[start:start + chars], res, b))
+            t.start(); ths.append(t)
+            time.sleep(0.3)                     # a burst, not a single instant
+        time.sleep(max(0.0, lag - 0.3 * (nbig - 1)))
+        probes = []
+        for k in range(nsmall):
+            small = {"model": MODEL, "messages": [{"role": "user", "content": SMALL}],
+                     "temperature": 0, "max_tokens": SMALL_NEW, "stream": True,
+                     "stream_options": {"include_usage": True}}
+            try:
+                out, wall, ttft = post(small, stream=True)
+            except Exception as exc:                          # noqa: BLE001
+                print("SMALL-ERR", i, k, repr(exc)[:90], flush=True)
+                continue
+            h = hashlib.sha256((out.get("content", "") + out.get("reasoning_content", "")).encode()).hexdigest()[:10]
+            ntok = (out.get("usage") or {}).get("completion_tokens", 0)
+            probes.append((ttft or 0.0, wall, h, ntok))
+            tts.append(ttft or 0.0); tws.append(wall)
+        for t in ths:
+            t.join()
+        goods = [r for r in res if r and r[0] > 0]
+        bws.extend(r[1] for r in goods); ptrs.extend(r[0] for r in goods)
+        print(f"R{i} big_ok={len(goods)}/{nbig} big_ptok={[r[0] for r in goods]} "
+              f"big_wall={[r[1] for r in goods]} probes="
+              + json.dumps([{"ttft": p[0], "wall": p[1], "ctok": p[3], "ans": p[2]} for p in probes]), flush=True)
     if not tts:
         print("NO-SAMPLES"); return
-    med = lambda xs: round(statistics.median(xs), 2)            # noqa: E731
-    print("SUMMARY " + json.dumps({"tag": tag, "n": len(tts), "ttft_med": med(tts), "ttft_min": round(min(tts), 2),
-                                   "ttft_max": round(max(tts), 2), "small_wall_med": med(tws),
-                                   "big_wall_med": med(bws), "big_ptok_med": med(ptrs)}), flush=True)
+    def med(xs):
+        return round(statistics.median(xs), 2) if xs else None
+    print("SUMMARY " + json.dumps({"tag": tag, "n_probes": len(tts), "ttft_med": med(tts),
+                                   "ttft_min": round(min(tts), 2), "ttft_max": round(max(tts), 2),
+                                   "small_wall_med": med(tws), "big_wall_med": med(bws),
+                                   "big_ptok_med": med(ptrs)}), flush=True)
 
 
 START = [0.0]
