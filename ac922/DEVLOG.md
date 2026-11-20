@@ -695,6 +695,29 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
 
 ## Deferred to an evening window (operator uses the box by day)
 
+- **Wave J - the CPU-side family (new, 11-20, after H.14 closed the three GPU-side gates).**  With
+  `ADAPT_FETCH`, `ADAPT_OVERLAP` and `EXCHANGE_ROTATE` all locked by the layer-split geometry, the
+  only untested handles on the two biggest decode-window lines (deep-window host-CPU experts
+  ~10.5 ms/window, GPU-reach ~3.1 ms/window) and on the still-unexplained cold-PP p10 tail (-39%,
+  which H.14 showed is *not* admission queueing) are the pool itself.  Arms, cheapest first, all
+  read out of `src/kernels/cpu/pool.cpp` / `generate.cpp` so no arm is guessed at:
+  1. `--aux-cpus` **request-level** (`generate.cpp:1506`: a request's `strata_tune` `aux_cpus=0|1`
+     beats the boot flag) - the only arm in this family that can be paired **within one boot**,
+     which the <4 ms/window cross-boot rule demands.  Alternate with `abreq.py`-style rounds.
+  2. `--pool-cores LIST` (`pool.cpp:753`, experimental, off by default; the plan comes from the real
+     topology and only the pinning/count comes from the list).  Candidate lists: exclude the cores the
+     co-resident I2V/H3 tenant burns, and a no-SMT-sibling list.  This is the direct test of the
+     "the tail is a co-tenant CPU fight" hypothesis.  One boot per list.
+  3. `STRATA_POOL_SPIN_US` (`pool.cpp:738`, the spin-before-sleep threshold).  Shorter spin = lower
+     wake latency for the pool's host-expert work; longer spin = fewer sleep transitions but more CPU
+     stolen from the tenant.  Pairs naturally with arm 2.  One boot per value.
+  4. `STRATA_NUMA_POOL=0` as a **pricing audit**, not a gain ticket: it should hurt the `cpu` line in
+     the decode-timing breakdown, which is how we put a number on the split we adopted.  Piggyback on
+     another boot's corpus, no extra traffic.
+  Audit-only note: `STRATA_NUMA_SPLIT=test` is a real mode in this tree (`pool.cpp:750`) - useful to
+  check placement decisions without changing the production shape.
+
+
 - **Caliber certification for our own ladder (new, 11-18)**: every same-length number in the panorama
   comes from `sbench.py`/`depthtg.py`, which build depth out of one repeated sentence.  That is exactly
   the mechanism that made the S1 archive points incomparable (repeated corpus feeds the suffix/ngram
