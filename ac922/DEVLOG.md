@@ -694,6 +694,46 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.15 - the WAN outage was not a host outage: node 8 ran dry and UVM's ATS migration could not get a single page (11-20 21:33-21:5x)
+
+- 20:2x-21:33 every path to the box was dead (WAN, internal, jump, BMC - 100% packet loss).  When
+  ssh came back the machine had **not** rebooted (uptime 1d8h50m, same 20:08:58 boot, health fine),
+  so the lane never dropped - but the routine log sweep caught what the outage window really was.
+- Kernel fact, not speculation: **782** `UVM GPU5 BH: page allocation failure: order:0,
+  mode:GFP_HIGHUSER_MOVABLE|__GFP_THISNODE` inside ~15 minutes, stack
+  `warn_alloc <- migrate_vma_alloc_page <- uvm_migrate_pageable <- service_ats_requests <-
+  uvm_gpu_service_non_replayable_fault_buffer`.  On POWER9+NVLink the GPUs reach system RAM through
+  ATS/HMM, and when UVM services a non-replayable fault it must allocate the migration target **on
+  that GPU's own node** - no fallback to the other socket.  At that moment node 8 had 0.85 GiB free
+  while `min_free_kbytes=352 MiB` and `watermark_scale_factor=10` (0.1%) left kswapd waking far too
+  late; direct reclaim in the fault path (`pgscan_direct` 1.1 M pages cumulative) still lost, on
+  **order-0**.
+- Sizing, which also settles the old 341 GiB mistake: node 0 = 91.8 GiB, node 8 = 127.7 GiB, so
+  ~**219.5 GiB of real DIMM**; nodes 250-255 are `ZONE_DEVICE`, i.e. the six V100 HBM windows read as
+  memory.  Per-process: our engine ~113.6 GiB (58.4 / 55.2 - first touch splits by *thread*, not by
+  node headroom), the H3 tenant ~13.5 GiB.  The failures landed on node 8 - H3's GPU5 - but the
+  pressure is joint: either lane can starve the other.  Node 8 has 36 GiB *more* capacity and still
+  went dry first.
+- Fix shipped to `/etc/sysctl.d/90-ac922-numa-reserve.conf`: `min_free_kbytes` 352 MiB -> **1 GiB**,
+  `watermark_scale_factor` 0.1% -> **1.5%**.  Node 8 Normal watermarks went from low=150 MiB to
+  **low 2.32 GiB / high 4.2 GiB** (page size here is **64 KiB** - read `/proc/zoneinfo` accordingly).
+- Canaries, all clean (this is the part that made it safe to keep): allocation-failure count frozen
+  at 782 (no new ones), `allocstall_normal` flat at 1, **engine majflt unchanged at 5376**, global
+  pgmajfault +279 over 6 min (H3's own activity), decode-timing 24 h medians unmoved.  What got
+  reclaimed is clean file cache (node 8 had 21.3 GiB inactive_file); our working set is the 37.67
+  GiB page-locked expert complement plus `--ple-io ram`, which sits in `unevictable` (23.9 GiB on
+  node 8) and cannot be touched.  Verified at *low* traffic - recheck under 4-way full-window.
+- Discipline link: this is the live evidence behind the operator's rules 2 and 3.  It promotes the
+  `--disable-mmap` single-variable arm from optional to **the discriminating experiment**: if ATS
+  migration failures and the remote-read penalty both disappear with mmap off, attribution locks on
+  the mmap/ATS path rather than our swap-in logic.  Queued into Wave J below.
+- New tickets from this event: (a) a shared-node-8 etiquette note for the cooperating thread
+  (check node 8 MemFree before a large allocation); (b) the real cure is **placement weighted by node
+  headroom**, which needs per-role byte sizes in the pack - the same missing metadata behind
+  `NUMA placement FAILED ... the split runs with remote reads`; (c) never reflexively `drop_caches`
+  here: the 48.8 GiB PLE park file and the expert mmap live in page cache, so clearing it degrades
+  us to ~2 GB/s NVMe re-reads.
+
 
 - **Wave J - the CPU-side family (new, 11-20, after H.14 closed the three GPU-side gates).**  With
   `ADAPT_FETCH`, `ADAPT_OVERLAP` and `EXCHANGE_ROTATE` all locked by the layer-split geometry, the
