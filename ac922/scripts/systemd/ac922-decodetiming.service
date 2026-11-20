@@ -1,0 +1,8 @@
+[Unit]
+Description=AC922 decode-timing sentinel scan (engine log -> rows jsonl, numbers only)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3.11 /data/work/bump-src/ac922/scripts/decodetiming_watch.py
+Nice=19
+IOSchedulingClass=idle
