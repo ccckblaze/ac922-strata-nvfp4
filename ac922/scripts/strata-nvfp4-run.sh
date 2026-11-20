@@ -169,6 +169,42 @@ if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_C
 # CC_MIB explicit so the worst case stays inside the box's real headroom.  Unset = shipped values.
 if os.environ.get("CC_SLOTS"): setflag("--conversation-cache-slots",os.environ["CC_SLOTS"])
 if os.environ.get("CC_MIB"): setflag("--conversation-cache-mib",os.environ["CC_MIB"])
+# conversation-disk cold tier (plan v2, 2026-11-20).  DISK_DIR turns the layer on; the rest are
+# optional and default to the engine's own values.  DISK_PERSIST=1 keeps conversations for the next
+# start and DISK_SYNC=N flushes idle N s in (0 = only at QUIT).  Pure launcher passthrough: the
+# engine flags exist since the 0.2.15 line (generate.cpp:1327-1341), nothing here changes numbers.
+def boolflag(name):
+    if name not in c["args"]: c["args"]+=[name]
+if os.environ.get("DISK_DIR"):
+    setflag("--conversation-disk-dir",os.environ["DISK_DIR"])
+    if os.environ.get("DISK_MIB"): setflag("--conversation-disk-mib",os.environ["DISK_MIB"])
+    if os.environ.get("DISK_TTL"): setflag("--conversation-disk-ttl-min",os.environ["DISK_TTL"])
+    if os.environ.get("DISK_SYNC"): setflag("--conversation-disk-sync-s",os.environ["DISK_SYNC"])
+    if os.environ.get("DISK_PERSIST"): boolflag("--conversation-disk-persist")
+if os.environ.get("CC_MIN_TOKENS"): setflag("--conversation-cache-min-tokens",os.environ["CC_MIN_TOKENS"])
+# RAM floor for parking/save/restore.  The engine measures it against MemAvailable, and this box
+# over-reports MemAvailable by the HBM-window mapping (the 341 GiB trap); MEM_LIMIT_MIB pins the
+# engine's RAM view to the real DDR so the floor means what it says.  CC_FLOOR=auto computes
+# max(20% of REAL, 16 GiB) with REAL from REAL_RAM_MIB or MemTotal - sum(nvidia-smi memory.total).
+if os.environ.get("MEM_LIMIT_MIB"): setflag("--memory-limit-mib",os.environ["MEM_LIMIT_MIB"])
+if os.environ.get("CC_MIN_FREE_MIB"): setflag("--conversation-cache-min-free-mib",os.environ["CC_MIN_FREE_MIB"])
+if os.environ.get("DISK_DIR"):
+    print("disk tier: dir=%s mib=%s ttl=%s sync=%s persist=%s min-tokens=%s mem-limit=%s" %
+          (os.environ["DISK_DIR"],os.environ.get("DISK_MIB","engine-default"),
+           os.environ.get("DISK_TTL","engine-default"),os.environ.get("DISK_SYNC","engine-default"),
+           "yes" if os.environ.get("DISK_PERSIST") else "no",
+           os.environ.get("CC_MIN_TOKENS","0"),os.environ.get("MEM_LIMIT_MIB","unset")))
+if os.environ.get("CC_FLOOR","").lower() == "auto":
+    real=int(os.environ.get("REAL_RAM_MIB") or 0)
+    if not real:
+        mt=int([l for l in open("/proc/meminfo") if l.startswith("MemTotal")][0].split()[1])
+        import subprocess
+        out=subprocess.run(["nvidia-smi","--query-gpu=memory.total","--format=csv,noheader,nounits"],
+                           capture_output=True,text=True).stdout.split()
+        real=mt-sum(int(x) for x in out)
+    floor=max(real//5,16384)
+    setflag("--conversation-cache-min-free-mib",floor)
+    print("floor: REAL=%d MiB FLOOR=%d MiB" % (real,floor))
 fbatch=int(c["args"][c["args"].index("--batch")+1]); fgroups=int(c["args"][c["args"].index("--batch-groups")+1])
 if fbatch!=ncard:
     print("NOTE: effective --batch %d on %d cards is not an accepted shape (4-card 4/2, 6-card 6/3)" % (fbatch,ncard))
