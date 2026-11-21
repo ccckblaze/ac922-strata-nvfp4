@@ -32,8 +32,8 @@ QUALGATE_DIR=${QUALGATE_DIR:-/data/work/qualgate}
 EVAL_DIR=${EVAL_DIR:-$REPO/ac922/eval}
 
 case "$CARDS" in
-  4) GPUS=${GPUS:-0,1,2,3};     EXPECT_GROUPS=2 ;;
-  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=3 ;;
+  4) GPUS=${GPUS:-0,1,2,3};     EXPECT_GROUPS=4; EXPECT_ROWS=1 ;;
+  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=3; EXPECT_ROWS=2 ;;
   *) echo "usage: $(basename $0) <4|6> <start|stop|restart|status> [--reanchor]"; exit 2 ;;
 esac
 export GPUS CUDA_VISIBLE_DEVICES="$GPUS"
@@ -113,8 +113,8 @@ verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engin
   log "  split : ${split##*serve: }"
   log "  shim  : ${pre:-LD_PRELOAD=<unset>}"
   log "  numa  : ${pool} NUMA cpu-pool lines, ${firsttouch} first-touch complement notes"
-  echo "$shape" | grep -q "$EXPECT_GROUPS pipelined groups of 2 slots" ||
-    { log "GEOMETRY-FAIL expected $EXPECT_GROUPS pipelined groups of 2 slots on $CARDS cards"; return 1; }
+  echo "$shape" | grep -q "$EXPECT_GROUPS pipelined groups of $EXPECT_ROWS slot" ||
+    { log "GEOMETRY-FAIL expected $EXPECT_GROUPS pipelined groups of $EXPECT_ROWS slots on $CARDS cards"; return 1; }
   [ "$stages" = "$CARDS" ] || { log "GEOMETRY-FAIL engine reports $stages stages, expected $CARDS"; return 1; }
   [ "${vis#*=}" = "$GPUS" ] || { log "GEOMETRY-FAIL engine sees ${vis:-nothing}, expected $GPUS"; return 1; }
   case "$pre" in *numabind.so*) ;; *) log "GEOMETRY-FAIL the NUMA shim is not in this process: numbers are not comparable"; return 1;; esac
@@ -140,7 +140,7 @@ verify(){ local L; L=$(engine_log); [ -f "$L" ] || { log "GEOMETRY-FAIL no engin
     log "  WARN  : the engine has restarted ${boots} times inside this lane boot - numbers span processes"
     [ -n "$why" ] && log "          cause as logged: ${why##*] }"
   fi
-  log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_GROUPS groups of 2, shim loaded"
+  log "GEOMETRY-PASS $CARDS cards ($GPUS), $EXPECT_GROUPS groups of $EXPECT_ROWS, shim loaded"
 }
 reanchor(){ # REF is per geometry (DECISIONS.md): keep the old anchor, write this shape's, then check
   local ref="$QUALGATE_DIR/REF.json" keep="$QUALGATE_DIR/REF-${CARDS}card-$(date +%Y%m%d).json"
