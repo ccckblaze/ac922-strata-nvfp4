@@ -366,8 +366,14 @@ Switching also removed a real footgun: the reference config carried the 6-card b
 - **Ship invariant, stated as a rule (user, 2026-11-17): 满窗是前提.** The shipped 4-card lane must
   serve concurrent streams at the byte-exact full window (262,136). If 4-way cannot be held, the
   ship shape drops to **3-way full window**; the window itself never drops. `eval/fullwindow.py` is
-  the arbiter and reports `prompt_tokens + completion == 262,144` exactly — "98.7% of the window"
-  is not a pass, and neither is a run where streams end early on their own.
+  the arbiter and reports `held_edge`: every stream finishes `length` parked on the same window end,
+  262,136, the engine's own 8-token draft reservation being the difference to 262,144 — "98.7% of the
+  window" is not a pass, and neither is a run where streams end early on their own.
+  **Re-proved on the shipping lane 2026-11-22** (0.1.61, disk cold tier on, one boot, three reads):
+  `all_prompt_exact` 4/4, `prompt+gen = 262,136` on all eight positions, `finish=length` 4/4 in every
+  read, `held_edge` 4/4; `sum_tg` 106.3 / 107.4 / 126.4 (span 25.9 / 25.1 / 19.6 s) — median 107.4,
+  i.e. the adopted figure, and the 126.4 read is exactly why a single shot is never published
+  (`PERFORMANCE.md` §9f, standing lesson 16).
 - **Gate defect fixed with it:** `lane.sh` now anchors the boot slice on the newest per-process
   `engine started:` banner instead of trusting the recorded offset, and reports
   `WARN the engine has restarted N times inside this lane boot` with the logged cause. Without this,

@@ -563,7 +563,45 @@ on, `STRATA_DECODE_TIMING=1`).
 
 **Operational defect found and fixed while closing the queue:** `armf5.sh` reads `FW`/`GEN` from its own
 environment, but the queue passes them as positional args (`FW=1`), so the full-window arm silently
-skipped its `fullwindow.py` step - the fix exports the named args before use.  Also recorded: killing an
+skipped its `fullwindow.py` step (the fix, applied later the same morning and verified with `bash -n`,
+is `for kv in "$@"; do export "$kv"; done` directly after the `shift 2` - the sentence claiming it was
+already in place was premature, see 9f).  Also recorded: killing an
 arm is not enough, the `strata-nvfp4-run.sh start` supervisor and its `serve.server` front respawn the
 engine; the kill order is queue -> arm -> supervisor -> front -> vision helper -> engine, verified by
 pid stability over 10 s.
+
+### 9f. Post-handback re-proof of the ship invariant, on the production boot itself (2026-11-22, 4 cards)
+
+Everything above was taken on six cards.  Before the lane went back to daytime traffic the full-window
+invariant was re-measured **on the shipping boot** - `lane.sh 4 restart` at 06:29:51, engine 0.1.61 on
+the `.4` tree, `--batch 4 --batch-groups 4`, `--spec 8`, `--layer-split 9,24,37` +
+`--vram-reserve-mib 832`, CC 48 GiB with the NVMe cold tier, learned expert-profile,
+`--trim-stage-weights`, `--kv int8 --kv-resident 32768`:
+
+| read | ptok per stream | `all_prompt_exact` | finish | prompt+gen | span s | sum_tg | per-stream tg (ascending) | burst ttft s |
+|---|---|---|---|---|---|---|---|---|
+| r1 06:44 | 261,632 ×4 | 4/4 | `length` ×4 | 262,136 ×4 | 19.57 | **126.4** | 27.2 / 29.9 / 33.3 / 36.0 | 0.8-5.6 |
+| r2 06:55 | 261,632 ×4 | 4/4 | `length` ×4 | 262,136 ×4 | 25.92 | **106.3** | 20.5 / 23.5 / 27.8 / 34.6 | 0.9-11.2 |
+| r3 07:06 | 261,632 ×4 | 4/4 | `length` ×4 | 262,136 ×4 | 25.14 | **107.4** | 20.7 / 24.1 / 28.2 / 34.4 | 0.3-10.5 |
+
+- **The invariant holds on the delivered binary**: in all three reads every stream is byte-exact at
+  261,632 prompt tokens and every stream is closed by the window, not by the model - `held_edge` 4/4
+  (edge 262,136 + the 8 tokens each stream still wanted = 262,144).  This is the cell the README had
+  been carrying from 2026-11-17; it is now a 0.1.61 fact, not an 0.1.59 one.
+- **The published number is the median, 107.4, and the reason is visible in the table**: 19% spread
+  between three reads *of the same boot*, with the fast read (126.4) showing the smaller span.  This
+  is the 9a band showing up at the window edge rather than across boots, so the rule extends:
+  a single full-window shot cannot price a ticket, and the 4-card ship figure keeps the family
+  (105.8 / 108.0 on 0.1.59, 102.4 in the 7b cutover boot, 109.3 on the first 0.1.61 boot, 107.4 here).
+- Nothing else was disturbed on the way: the boot's own log slice carries zero `out of memory` lines
+  (the three in the concatenated log belong to earlier, superseded boots), no respawn
+  (`engine started:` once inside this boot), cards 4/5 idle, and the same boot passed
+  `QUALGATE-PASS` (`det` ×3 exact, `acc-drift-ok 0.953`) before these reads.
+- **Two harness debts found while doing it, both closed:** (i) `/data/work/note312/fullwindow.py` was
+  the pre-fix copy, so all three reads print the retired `window_fully_consumed: 0` flag instead of
+  `held_edge`; the repo version is installed there now (old copy kept as `*.pre-held_edge`) and the
+  invariant is recomputed from the JSON.  (ii) the `armf5.sh` `FW`-gate defect in the note above was
+  *not* fixed when §9 said it was; it is fixed now.  (iii) stale experiment furniture was found still
+  waiting on a `Q3-END` marker that will never arrive (`/root/queue4.sh`, plus a watchdog set to stop
+  the dead queue at 07:29) - killed, because a queue that wakes after handback restarts the lane under
+  the operator's feet.

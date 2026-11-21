@@ -694,6 +694,42 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.25 - the ship invariant re-proved three times in one boot, and it did not agree with itself (11-22 06:30-07:2x, 4 cards)
+
+- **What this was.** After H.24's hand-back, the full-window cell on the *shipping* lane had still only
+  ever been measured by one read per boot.  `fullwindow.py run --n 4 --gen 512 --total 262144` was run
+  three times against the production boot (06:44, 06:55, 07:06): byte-exact 261,632-token prompts 4/4 in
+  every read, `finish=length` 4/4, `prompt+gen = 262,136` on all four positions in all three - and
+  `sum_tg` **126.4 / 106.3 / 107.4**.  Table and read in `PERFORMANCE.md` §9f.
+- **The 126.4 did not survive replication, and that is the whole lesson.** Had we shipped the first read
+  as "4-card full window 126.4 tok/s", the next person to price a ticket against it would have been
+  chasing 18% of noise.  Spread inside *one boot* is 19% at the window edge, so H.16's "never compare a
+  single shot to a median" is not a cross-boot caveat only - at the deep end it is a replicate caveat,
+  same lane, same binary, minutes apart.  Published value: median **107.4**, with the family (105.8 /
+  108.0 / 109.3 / 102.4) named next to it.
+- **The invariant itself is now a 0.1.61 fact.** README/DECISIONS carried the 4-card full-window row from
+  the 0.1.59 adoption day; the row, the `held_edge` caliber sentence and a caliber caveat that names the
+  still-0.1.59 ladder cells are all corrected in both languages (README, README.zh-CN, DECISIONS).
+- **Three harness debts found by looking, not by measuring.** (1) The server's
+  `/data/work/note312/fullwindow.py` was the pre-fix copy, so all three reads printed the retired
+  `window_fully_consumed: 0` instead of `held_edge` - the repo copy is installed there now, old file kept
+  as `*.pre-held_edge`; the invariant is computable from the JSON we already have (edge + still-wanted =
+  total).  (2) H.24 and §9 both claimed the `armf5.sh` `FW`-gate fix was in place; it was not - the script
+  reads `FW` from its own environment while the queue passes it positionally.  Applied and syntax-checked
+  (`export "$kv"` for each leftover arg, right after the `shift 2`).  (3) Two dead pieces of experiment
+  furniture were still armed: `/root/queue4.sh`, parked in a `sleep 30` loop waiting for a `Q3-END` marker
+  that will never be written, and a `sleep 8630` watchdog that would have touched `q3.stop` at 07:29.
+  A queue that wakes after hand-back restarts the lane under the operator's feet, so both were killed;
+  the check is now part of hand-back: `pgrep -af "queue[0-9]*\.sh|armf|diagladder"` must be empty, not
+  just the GPU (plain `pgrep -af queue` matches the box's `nv_queue` kernel helpers and is useless here).
+- **Hand-back audit (the standing discipline: read the log before declaring the lane healthy).** The
+  boot's own rotated log (`strata-nvfp4-2026-11-21T22:29:51Z.log`) carries **0** `out of memory` lines -
+  the three in the concatenated live log are from superseded boots, including a 6-card slot-4 MTP capture
+  that cannot apply to a 4-slot lane.  Last 200 completions read 51.6 tok/s mean generation rate over a
+  p50 prompt of 97K, which is what §5a predicts for that depth; cards 4/5 at 658/27 MiB.  `lane4.sh
+  status` -> `GEOMETRY-PASS 4 cards (0,1,2,3), 4 groups of 1, shim loaded`, one engine pid (105568) with
+  33 min uptime, no `restarted N times inside this lane boot` WARN, 78.5 GiB `avail` RAM.
+
 ### H.24 - the .5 wave: a second tree has to carry the vision helper, a killed arm leaves an orphan boot that holds the lock, and our own window anatomy re-ranks the next attack (11-22 05:2x-, 6 cards)
 
 - **The `.5` boot died before it ever answered health, and the reason was not the engine.** The lane
@@ -1181,4 +1217,12 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     4-card 65K reading (72.1, median of 10 rounds over two runs) differ by 11%, but the same 4-card
     protocol drifted 6.1% between its own two runs - so half of that "gap" is confidence, not speed.
     State the round count next to every deep-window number, or the chart silently ranks noise.
+17. Replicate noise is not only a cross-boot thing.  Three full-window reads minutes apart **inside one
+    boot, one binary** came back 126.4 / 106.3 / 107.4 - 19% spread at the window edge, which is where
+    every ship claim lives.  At depth the unit of evidence is a repeat set, not a run, no matter how
+    clean the boot is.
+18. A sentence saying something was fixed is not a fix.  Two docs claimed the `armf5.sh` `FW`-gate bug
+    was closed while the script still read `FW` from its own environment; and the server's copy of
+    `fullwindow.py` predated the `held_edge` fix while the DEVLOG described the fixed behaviour.  Before
+    citing a correction, grep the artifact that carries it (and diff the deployed copy against the repo).
 
