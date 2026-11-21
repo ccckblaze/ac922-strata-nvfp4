@@ -733,6 +733,23 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   parked; and the third anchor (`ctlB`, same env as `ctlA` and `ctl22`) widened the 131 K boot-to-boot
   spread to 13.1%, so single-boot deep deltas below ~15% are now reported as unresolvable instead of
   neutral.
+- **The wave's verdict (PERFORMANCE 9e): `.5` is not adopted.** Three boots on the `.5` tree -
+  `ctl5` as-is, `kfast0` with `STRATA_KV_RESIDENT_FAST=0`, `mmerge` with `STRATA_MTP_MERGE_FAST=0` -
+  land at 136.0 / 137.6 / 132.4 `sum_tg` at 131 K (3.9 % apart from each other) while the three `.4`
+  boots of this same night land at 146.9 / 160.5 / 166.1 (13.1 % apart).  Every `.5` boot is below
+  every `.4` boot, the `.5` cluster is the tight one, and reversing each of the two new all-CUDA
+  defaults in its own boot moves nothing - so the depth-dependent cost (-13 to -16 % at 131 K,
+  ~-3 % at 98 K, neutral at 8 K/50 K) belongs to the `.5` engine rather than to a switch we can set.
+  The whole-version policy says no cherry-picking, so `.5` goes back on the shelf for the next
+  `-nvfp4.x` tag with this evidence attached.  What made it a verdict instead of a hunch was the
+  replication: three boots of the *same* thing is a distribution, and one boot of a *reversal* is a
+  mechanism claim - having both is what the 13 %-band rule asks for.
+- **Hand-back on the shipping tree, gated.** `lane.sh 4 restart` -> `GEOMETRY-PASS 4 cards (0,1,2,3),
+  4 groups of 1` (the adopted 4/4 ship shape), engine 0.1.61, `resident RAM mode: 38.23 GiB of experts
+  in RAM (page-locked) ... (no file reads)`, cards 4/5 verified free, and `QUALGATE-PASS`
+  (`det` x3 exact, `acc-drift-ok 0.953`, four `relay-cell-drift` WARNs at the known cells).  The
+  `NUMA placement FAILED: this pack has no per-role byte sizes` line is still in every boot - that is
+  the dev-lane project, and 5a says exactly how much it is worth.
 ### H.23 - reading the .5 bump before running it; the noise floor came free, and one arm was deleted before it cost a boot (11-22 03:55-04:3x, 6 cards)
 
 - The bump is upstream `v0.2.15-nvfp4.5`, merged into our line as `b352a38148`; the launcher knobs
