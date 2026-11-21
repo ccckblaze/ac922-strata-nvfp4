@@ -50,7 +50,7 @@
   "--batch",
   "4",
   "--batch-groups",
-  "2",
+  "4",
   "--trim-stage-weights"
  ],
  "gpu": [

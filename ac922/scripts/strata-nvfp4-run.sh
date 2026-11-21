@@ -152,7 +152,10 @@ if len(c["gpu"]) != 4 or "STRATA_LAYER_SPLIT" in os.environ:
         c["layer_split"] = sp; setflag("--layer-split", sp)
 ncard=len(c["gpu"])
 if batch<2 and groups<2 and ncard in (4,6):
-    batch,groups=(4,2) if ncard==4 else (6,3)
+    # 4-card shape is 4 groups of 1 row (2026-11-21 sweep, runbook 337): on 4 stages the
+    # 2-groups-of-2 pipeline leaves bubbles and its agg wall loses +4~8% to 4x1 at 8-98K with
+    # single streams unharmed; on 6 cards 3x2 stays the winner (deeper rows-per-group sharing).
+    batch,groups=(4,4) if ncard==4 else (6,3)
     print("auto batch shape for %d cards: %d/%d" % (ncard,batch,groups))
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
