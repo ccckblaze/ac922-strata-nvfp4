@@ -38,11 +38,14 @@ if grep -aq "out of memory" "$SLICE"; then
 else
   ok "no out-of-memory lines in this boot"
 fi
-for probe in "batch (pipelined" "resident RAM mode:" "disk tier:"; do
+# The engine's own proof lines.  `disk tier:` is printed by the launcher into its restart log, not
+# into the engine log, so the cold tier is proved here by what it actually does (a `disk hit:`), and
+# the shape by the same anchor lane.sh uses (`STRATA_PIPED_MTP:`).
+for probe in "STRATA_PIPED_MTP:" "serve: layer split: layers" "resident RAM mode:" "disk hit:"; do
   if grep -aq "$probe" "$SLICE"; then
     ok "$(grep -a "$probe" "$SLICE" | tail -1 | sed 's/^strata [a-z]*: //' | cut -c1-130)"
   else
-    warn "no self-report line for '$probe'"
+    warn "no proof line in this boot for '$probe'"
   fi
 done
 if grep -aq "NUMA placement FAILED" "$SLICE"; then
