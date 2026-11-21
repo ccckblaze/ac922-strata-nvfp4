@@ -130,13 +130,43 @@ What the family says, on this box:
 
 ## 5. Decode window anatomy (why tg behaves the way it does)
 
-From the engine's own `STRATA_DECODE_TIMING` on this box: the dominant term is the **expert
-product** (≈61% of window time), GPU-reach wait ≈28%, host CPU ≈12%. Consequences we verified:
+First numbers here were the **sister box's** split (expert product ≈61% of window time, GPU-reach
+wait ≈28%, host CPU ≈12%). 5a re-measures it on our lane and the shape is different, so read 5a before
+re-using the 61/28/12 numbers. Consequences we verified on our own lane:
 - per-stream tg is a **stage-count** axis, not a card-count axis (2–3 card tg ≈ 6 card tg);
 - concurrency gains come from sharing expert streaming reads inside one window
   (`--batch-groups` with ≥2 rows), which is exactly what the adopted ring shape does;
 - host-wait reduction levers adopted: NUMA bind + PLE park; the remaining big lever (FP4
   tensor-core expert kernels, ticket ⑧/QPN2) is parked upstream-side, not ported.
+
+### 5a. Re-measured on this lane (2026-11-22, 6 cards, shipped env) — the deep window is host-side, not GPU-side
+
+The 61 / 28 / 12 split above was borrowed from the sister box. Our own engine log carries 6 755
+`STRATA_DECODE_TIMING` lines in its 68 MB tail, which is this night's ladder boots, and they do not
+replicate it. Batched windows (the `>=4 windows` lines, where MTP is landing 1.9-3.5 tokens/window):
+
+| window class | n | ms/win | tok/win | GPU-reach | host-CPU experts | adapt wait | draft | GPU body (residual) | VRAM hits/layer-win | misses/layer-win | swaps/win |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <=30 ms (short) | 201 | 27.05 | 1.90 | 3.32 = 12% | 0.52 = 2% | 0.03 | 2.10 | **20.24 = 75%** | 17.0 | 0.04 | 0.2 |
+| 30-45 ms (mid) | 369 | 36.33 | 2.57 | 4.29 = 12% | 6.24 = 17% | 1.19 | 3.20 | **18.97 = 52%** | 28.4 | 0.73 | 7.4 |
+| >45 ms (deep) | 174 | 51.82 | 3.48 | 4.88 = 9% | 17.48 = 34% | 2.87 | 4.33 | **19.88 = 38%** | 38.8 | 1.68 | 16.8 |
+
+Single-window lines (no draft accepted, 1.00 token/window) say the same thing at a lower rate: 18.95 ms
+with 0.00 host-CPU at short depth, 32.38 ms with 8.91 ms host-CPU (28%) at 30-40 ms, 55.61 ms with
+22.62 ms (41%) beyond that. Reading of the table:
+
+- the **GPU-executed body is flat at ~19-20 ms** in every class while the window doubles (27 -> 52 ms);
+  the whole deep-window penalty is **delivery**: host-CPU experts 0.52 -> 17.48 ms, adapt wait
+  0.03 -> 2.87 ms, swaps 0.2 -> 16.8 per window;
+- the expert-cache hit *ratio* stays high (95.8% at the deep end vs 99.8% short), but the absolute miss
+  count per layer-window grows 0.04 -> 1.68, i.e. ~2 -> ~80 experts/window computed off-VRAM across the
+  48 layers - that is the `FileExpertSource: RAM budget ... read from the files` complement, not a
+  thrashing cache;
+- GPU-reach wait is a flat 3-5 ms handshake (9-12%), so the sister box's 28% figure does not transfer;
+- priority consequence: the deep-window levers are the **quality-neutral delivery ones** (complement
+  NUMA placement, fetch overlap, resident coverage, `--adapt-every` / learned profile), and the
+  tensor-core expert kernel (⑧/QPN2) attacks the flat ~20 ms body - 75% of a short window but only
+  38% of a deep one, which is consistent with the sister measurement of QPN2 net-negative in serving.
 
 ## 6. Full-window concurrency ceiling (2026-11-17, measured on the ship config)
 
@@ -444,19 +474,25 @@ Measured (4-card boots, `phaseA/phaseC` harnesses, `AC922-bringup-runbook.md` §
 
 ### 9a. Anchors: how much a boot-to-boot difference is worth
 
-Same lane, same binary (`--batch 6 --batch-groups 3`, CC 48 GiB, resident complement 64 GiB, learned
-expert profile), four depths, 3 h 38 min apart:
+Same lane, same binary, same env (`--batch 6 --batch-groups 3`, CC 48 GiB, resident complement 64 GiB,
+learned expert profile), three boots - `ctl22` 00:45-01:00, `ctlA` 04:07-04:24, `ctlB` 05:13-05:23:
 
-| depth | ctl22 sum_tg / tg_med | ctlA sum_tg / tg_med | rows/step | band |
+| depth | sum_tg (ctl22 / ctlA / ctlB) | tg_med | rows/step | spread (max-min) |
 |---|---|---|---|---|
-| 8 000 (cold) | 108.1 / 12.8 | 107.3 / 12.9 | 3.42 / 3.43 | ~1 % |
-| 50 000 | 208.4 / 33.9 | 211.3 / 35.4 | 3.35 / 3.36 | 2-4 % |
-| 98 000 | 179.8 / 28.8 | 172.8 / 28.2 | 3.39 / 3.35 | ~4 % |
-| 131 000 | 160.5 / 26.1 | 146.9 / 23.5 | 3.24 / 3.27 | **8.5-10 %** |
+| 8 000 (cold) | 108.1 / 107.3 / 105.5 | 12.8 / 12.9 / 12.6 | 3.42 / 3.43 / 3.35 | 2.4 % |
+| 50 000 | 208.4 / 211.3 / - | 33.9 / 35.4 / - | 3.35 / 3.36 | 1.4 % (2 boots) |
+| 98 000 | 179.8 / 172.8 / - | 28.8 / 28.2 / - | 3.39 / 3.35 | 4.0 % (2 boots) |
+| 131 000 | **160.5 / 146.9 / 166.1** | 26.1 / 23.5 / 27.2 | 3.24 / 3.27 / 3.30 | **13.1 %** (sd ~6 %) |
 
-rows/step agrees to two decimals at every depth, so the shape is stable and what moves between boots
-is the speed inside the window.  Every arm in this wave is therefore read against that band, not
-against the 1.5 % used for same-boot pairs: at the deep end a single boot proves nothing below ~9 %.
+rows/step agrees to two decimals in every boot at every depth, so the ring shape is stable and what
+moves is the speed inside the window - and at the deep end the movement is larger than any single
+ticket we have measured all week.  The rule this wave therefore runs on:
+
+- shallow/mid deltas (<=98 K): read against ~2-4 %, a single boot is admissible;
+- deep (131 K): a single boot resolves nothing below ~15 %; anything smaller is reported as
+  "not resolvable at this statistical power", never as neutral and never as a win;
+- `wall_tg` is noisier than `sum_tg` at depth (112.1 / 102.0 / 129.8), because it folds the admission
+  and prefill tail in; the decode columns are the ones quoted.
 
 ### 9b. Wave Q2 - env arms on the shipping .4 lane (all 6 cards, deltas against ctlA)
 
@@ -465,6 +501,11 @@ against the 1.5 % used for same-boot pairs: at the deep end a single boot proves
 | `noarena` | drop `--resident-budget-gib`: experts stream through the file-cache arena (`MAP_HUGETLB unavailable`, NUMA placement not applied) | +3.3 % | -2.7 % | **-16.2 %** | **-23.3 %** (tg_med -27.2 %) | **the page-locked complement is worth 16-27 % at deep context** - and it is the price `serve/replicas.py:106` makes a replica layout pay, since `--resident-budget-gib` is on its `ARENA_INCOMPATIBLE` list |
 | `dx` | `SELECT_LONG=1 SCORES_DX=1 SELECT_LONG_AT=24576` (the RTX 50 long-context block scorer) | -2.0 % | -2.5 % | -1.2 % | -5.2 % | no gain on V100.  8K/50K are inert by construction (the path needs a window graph over 24 576 cells, `src/core/verify.cpp:191-214`), so only 98K/131K are informative, and they are neutral-to-negative at or under the band |
 | `topk` | `TOPK_COMPACT=1` (sister claim: +3.5-4 % decode) | -3.2 % | -0.0 % | +1.3 % | -1.8 % | **cannot fire in this lane**: the compact path dispatches past the register kernel's reach, `TK_T * TK_PER = 1024 * 33 = 33 792` blocks, i.e. above ~270 K tokens, or in the counted prompt band (`> 22 528` blocks with `active_blocks > 0`) - our decode windows top out at 32 768 blocks (`src/kernels/cuda/qsa_select.cu:907,3470-3476`).  The four deltas are the band, not a ticket |
+
+With `ctlB` as the second anchor (9a), the 131 K column of this table is read as advisory: `noarena` is
+the only arm whose delta exceeds the 13 % boot-to-boot spread, and it exceeds it in the same direction
+as its 98 K delta (-16.2 %), so the mechanism and the magnitude agree.  `dx` and `topk` sit inside the
+spread and are retired on their **mechanism** (9c), not on these numbers.
 
 ### 9c. The mechanism audit is earning its keep
 
