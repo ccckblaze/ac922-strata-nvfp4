@@ -99,6 +99,13 @@ def wave(stems, tok, workers=4):
     return [res[i] for i in range(len(stems))]
 
 
+def measure_tokens_per_unit():
+    """How many prompt tokens one FILL copy costs on this tokenizer.  Guessing it is how a '148K'
+    fixture quietly becomes 74K, and the test then pressures the wrong band."""
+    probe = ask([{"role": "user", "content": FILL * 20}], 1)
+    return max(1.0, (probe["ptok"] or 480.0) / 20.0)
+
+
 def main():
     ndeep = int(flag("--deep", "2"))
     deep_tok = int(flag("--deep-tok", "148000"))
@@ -106,10 +113,13 @@ def main():
     short_tok = int(flag("--short-tok", "8000"))
     settle = int(flag("--settle", "60"))
     nonce = int(time.time())
-    print("PARKPRESSURE url=%s nonce=%d deep=%d@%d short=%d@%d settle=%d"
-          % (URL, nonce, ndeep, deep_tok, nshort, short_tok, settle), flush=True)
+    per = measure_tokens_per_unit()
+    dunits = max(1, int(deep_tok / per))
+    sunits = max(1, int(short_tok / per))
+    print("PARKPRESSURE url=%s nonce=%d deep=%d@%d short=%d@%d settle=%d tokens_per_unit=%.1f"
+          % (URL, nonce, ndeep, deep_tok, nshort, short_tok, settle, per), flush=True)
 
-    deep_stems = ["Deep chain %d of run %d. " % (i, nonce) + FILL * int(deep_tok / 48)
+    deep_stems = ["Deep chain %d of run %d. " % (i, nonce) + FILL * dunits
                   for i in range(ndeep)]
     t0 = time.time()
     built = [chain(s, 1)[0] for s in deep_stems]
@@ -117,7 +127,7 @@ def main():
 
     time.sleep(settle)
 
-    short_stems = ["Short chain %d of run %d. " % (i, nonce) + FILL * int(short_tok / 48)
+    short_stems = ["Short chain %d of run %d. " % (i, nonce) + FILL * sunits
                    for i in range(nshort)]
     t0 = time.time()
     short = wave(short_stems, short_tok)
