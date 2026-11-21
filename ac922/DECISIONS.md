@@ -544,16 +544,39 @@ Also from the same wave: the "10.5 ms/window host-CPU experts" figure we carried
 *cold-adaptation* number; warmed it is 2-3 ms/window, so the remaining deep-window cost is the
 sm70 expert product itself (verify minus reach ~22 ms), which no pool knob touches.
 
-## Rejected - the MTP draft layer's cheap levers on the agent shape (Wave N, 2026-11-21, 6 cards)
+## Measured neutral / incident - the fork-tuned MTP layer and the Wave N mis-baseline (2026-11-21, 6 cards)
 
-| Ticket | Idea | Measured | Verdict |
-| --- | --- | --- | --- |
-| `spec_min_p` 0.5 / 0.35 (same-boot ladder, shipped draft) | lower the draft gating threshold to buy acceptance depth at 185-247K | tg bands overlap the 0.7 default (tpw 2.31-2.49 everywhere); no sign beyond band | **dead ticket** - agent-shaped acceptance is already healthy; do not re-run |
-| `MTP_DIR=.../mtp/rt-tuned` | swap in the sister's tuned dense draft (their docs price +5.7~11.8%) | paired slices -4.9% and -14.1% tg; msw flat +1.4-1.7 ms/window, tpw not higher | **rejected** - the sister pricing does not transfer to this fork/shape |
-| `MTP_DIR=.../mtp/rt-tuned-code99` | rt-tuned + draft table widened to 127,440 ids (prod CJK + 2,703 code-corpus tokens) | paired slices -5.9% and -11.4% tg, same msw penalty signature | **rejected** - table widening moved neither tpw nor tg on the probe |
+**Incident (read this before trusting any same-day draft numbers).** The .4 server's drafting
+auto-detect (`strata_control/drafting.py:467` `fork_tuned_mtp_dir`: a complete
+`<model data>/mtp/rt-tuned` is picked at every start, and `FORK_MTP_FLAGS` (`--spec 8
+--mtp-head proxy --mtp-cum auto`) ride with it) silently switched every boot after the 11:20
+staging of `mtp/rt-tuned` onto the tuned dense draft. So Wave N's "A default" boot (13:21) was
+already running the tuned layer, arm D (explicit `MTP_DIR=.../rt-tuned`) was the same
+configuration, and arm E's code99 table was shadowed (the search hits the plain
+`mtp/rt-tuned` first) and was never actually loaded. The apparent "D/E -5~-14%" was
+cross-boot noise plus the rt1-style cold-adapt outlier (msw 37 ms first window) - against the
+discipline "effects below ~4 ms/window must not be judged across boots".
 
-Mechanism note: the user's live-session symptom (`avg T 1.00` at ~223K agent chains) is
-**content-specific** - tool-result JSON tokens sit outside the draft vocab - and is not
-reproduced by the code+tool probe (which runs ~2.4 tpw).  A full `codebig.txt` rebuild of the
-draft table stays parked; its motivation is weakened because the probe shape shows no
-acceptance deficit to fix.
+**Fair re-run (abTuned.sh, 15:03-15:25, alternating boots RT1/SH1/RT2/SH2, same corpus slices,
+agent-shaped code+tool probes at 185-247K, temp 0, ctok 256, default 0.7 gate):**
+
+| arm | tg by slice (212687 / 184711 / 246871) | mean |
+| --- | --- | --- |
+| RT tuned (RT1 excl. cold outlier, RT2) | 85.1 / 84.6 / 77.3+84.7 | ~84 |
+| SH shipped (sh1, sh2) | 80.2+81.0 / 85.8+84.5 / 79.3+79.7 | ~81.7 |
+
+Verdict: **neutral within the ±5% pair band, signs inconsistent across slices** - the tuned
+dense draft's sister pricing (+5.7~11.8%) does not show on this box at agent depth. Both bands
+also confirm the flags themselves are not the axis: SH boots carried the same `--spec 8
+--mtp-head proxy` (the flags come with the server's auto path regardless of the dense dir).
+
+| Ticket | Verdict | Reason |
+| --- | --- | --- |
+| run production on `mtp/rt-tuned` | **not adopted; directory held out** at `/data/work/tuned-holdout/` | zero measured upside; its presence silently re-wires the draft at every start - the exact failure mode of this incident |
+| `MTP_DIR=.../rt-tuned-code99` | **never tested** - the auto search picks plain `rt-tuned` before any custom dir; the code99 table (arm F) stays parked |
+| `spec_min_p` 0.5 / 0.35 same-boot ladder | stays **dead ticket** | it was measured on a tuned-layer boot, but since RT≈SH the conclusion carries; do not re-run |
+| cold-adapt first-window msw outlier (37 ms on RT1) | recorded | first probe round after a boot is not a measurement; discard or pair it |
+
+**Standing guard adopted with this verdict:** keep `mtp/rt-tuned` out of `<model data>/mtp/`
+unless an experiment explicitly puts it back, and re-verify `--mtp` in the live engine's
+cmdline after ANY bump or data-dir sync - the auto-detect will re-arm silently.

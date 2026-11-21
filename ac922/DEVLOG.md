@@ -694,23 +694,31 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
-### H.20 - Wave N closed: the MTP draft layer has no cheap win left on the agent shape (11-21 early afternoon, 6 cards)
+### H.20 - Incident: the .4 auto-detect silently switched the draft layer; fair RT/SH A/B says the tuned layer is neutral (11-21 afternoon, 6 cards)
 
-- Two boot-level draft arms against the shipped `--mtp` (`MTP_DIR` passthrough, run.sh:170), same
-  corpus base, paired slices: **D** = sister's `rt-tuned` dense draft, **E** = rt-tuned + a
-  code-heavy draft table (127,440 ids = prod CJK 124,737 + 2,703 corpus tokens).  Result: tg
-  -4.9% / -14.1% (D) and -5.9% / -11.4% (E) on the two paired 185-247K agent-shaped slices -
-  msw is a flat +1.4-1.7 ms/window (draft verify got dearer) while tokens/window never rises.
-  The sister's +5.7-11.8% does not transfer: our shipped draft is already at parity or the call
-  shape differs.  **Both rejected**; adoption would need positive evidence, both signs are negative.
-- Same-boot spec_min_p ladder (0.7 / 0.5 / 0.35) on the shipped draft: bands overlap, tpw 2.31-2.49
-  everywhere - the gate-lowering ticket is **neutral, dead**.  Agent-shaped acceptance is already
-  healthy (~2.4 tpw); the live-session `avg T 1.00` is content-specific (tool-result JSON outside
-  the draft vocab), not a threshold.  Arm F (full codebig rebuild of the table) stays parked with
-  weakened motivation for exactly that reason.
-- Wave N tail restored the default boot (shipped mtp, HEALTH-200, ctx 262144).  Cheap levers on the
-  draft path are now exhausted: gate ticket dead, D/E dead.  What remains on the decode side is
-  structural (QPN2/tensorfold - still needs our own 82%-of-window proof) or SpecPrefill (path 6).
+- Root cause: `strata_control/drafting.py` `fork_tuned_mtp_dir()` looks for a complete
+  `<model data>/mtp/rt-tuned` **at every start** and swaps it in with `FORK_MTP_FLAGS`
+  (`--spec 8 --mtp-head proxy --mtp-cum auto`). We staged `mtp/rt-tuned` at 11:20 for the
+  draft A/B - every boot from 13:21 on (the acceptance6 ladder, Wave N's "A default",
+  chainprobe, both arms) ran the tuned dense draft without saying so in the banner. The
+  `--mtp` in `run.json` is NOT the truth for the draft layer; the live process cmdline is.
+- Consequently Wave N's original "D/E rejected by -5~-14%" was mis-baselined: D was the same
+  config as A, and E's code99 table was shadowed (plain `rt-tuned` is searched first) and
+  never loaded. The 1.4-1.7 ms/window "msw penalty" was cross-boot noise + one cold-adapt
+  outlier round (msw 37.08 on RT1's first window).
+- Fair test: `/data/work/abTuned.sh` - alternating boots with the tuned dir present/absent
+  (RT1/SH1/RT2/SH2), same corpus slices, agent-shaped probes at 185-247K.  Result ~84 vs
+  ~81.7 mean tg, bands overlap, signs inconsistent across slices: **neutral**. The sister's
+  draft-layer pricing does not show on this box at agent depth.
+- Actions: tuned dirs held out to `/data/work/tuned-holdout/` (their presence changes the
+  config silently even when nobody asks for it); production left on the shipped dense draft
+  with the auto FORK_MTP_FLAGS (which ride regardless - confirmed in both arms' cmdlines);
+  post-bump check added: grep `--mtp` from the LIVE engine cmdline, not from run.json.
+- Also learned: the spec_min_p ladder (0.7/0.5/0.35, same-boot) stays a dead ticket - it ran
+  on a tuned-layer boot, but RT≈SH carries the conclusion; do not re-run.  Chainprobe at
+  240K (tpw 1.79-2.35) never reproduced the live-session `avg T 1.00`: the live pain is
+  content-specific (tool-result JSON outside the draft vocab) and remains a measurement hole
+  we cannot close with synthetic chains.
 
 ### H.19 - Upstream followed to v0.2.15-nvfp4.4: zero-conflict bump, one CUDA-12.4 portability gate, dev lane green (11-21 morning, cards 4/5)
 
