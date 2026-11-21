@@ -609,7 +609,9 @@ decode, n=4, wall_tg medians:
 - 4/1 re-confirmed dead (-21 to -33%).  The analysis's reason was wrong though:
   `--batch-groups 1` keeps a serial window WITH slot drafts (`batch_groups.hpp`);
   drafts die on the auto-pipelined path only when groups>=2 without `STRATA_PIPED_MTP`.
-  The 4-card idle-window floor is ~27-30 ms (tg1 84-90), not the borrowed 17-18 ms.
+  Idle-window floor correction (decode-timing evidence, 11-21 night): the 17-18 ms
+  claim was RIGHT for the idle single window (4-card 17.1-18.8 ms, 2-card 16.95 ms);
+  27-30 ms is the BURST window (tg1 84-90) - the two are different regimes.
 - Noise floor (accidental 3-boot 4/2 replicate, after the auto-shape clamping incident
   where run.sh silently forced (4,2) unless `STRATA_BATCH_GROUPS` env is passed): wall_tg
   ±2.5% at 8K, worst -5.6% at 50K, ±1.2% at 98K, ±2.2% at 131K.  Rule: effects under

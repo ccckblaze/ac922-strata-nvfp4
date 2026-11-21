@@ -716,8 +716,11 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   than predicted - coalesced streaming reads were not the binding constraint here.
 - Claims judged: `groups=1 丢草稿` is **mechanically wrong** (a 1xN serial window keeps
   slot drafts per `batch_groups.hpp`; the auto-pipelined path is what skips them), but
-  4/1 is dead anyway on measured aggregate; the 17-18 ms idle floor was a borrowed
-  6-card number - our tg1 84-90 implies ~27-30 ms/window.  Capacity claim confirmed.
+  4/1 is dead anyway on measured aggregate.  The idle-floor claim was **right and my
+  original rejection was wrong**: `STRATA_DECODE_TIMING` single-window lines measure
+  17.1-18.8 ms/window on the 4-card lane (and 16.95 ms on 2 cards); the 27-30 ms figure
+  belongs to *burst* windows (tg1 84-90), not the idle floor - I conflated the two.
+  Capacity claim confirmed.
 - Methodology artifact worth keeping: the round-1 boots silently clamped to the
   launcher's auto-shape (run.sh forces `(4,2)`/`(6,3)` whenever `STRATA_BATCH*` env are
   unset, overriding config edits) - the accidental 3-boot 4/2 replicate became our
