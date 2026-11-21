@@ -530,3 +530,40 @@ not evidence; the knob inventory is (870 `STRATA_*` names in the .4 binary, 899 
 `STRATA_MTP_ATTN_PIPE` (:1630).  `src/core/nv_defaults.cpp` carries sections for 8.6, 6.0, 12.1 and
 12.0 and none for 7.0, so nothing else is silently adopted on V100.  Their arms (`kfast0`, `mmerge`,
 `dxr`, `ilp`) follow in 9e.
+
+### 9e. Wave Q3 - the `.5` tree measured on our cards (three boots, deltas against the three `.4` anchors)
+
+Same protocol, same pack, same `expert-profile-learned.bin` (sha256 `592b...` in both trees), launch
+cmdlines byte-identical apart from the tree path:
+
+| arm | what it changes | 8K | 50K | 98K | 131K |
+|---|---|---|---|---|---|
+| `ctl5` (boot 05:35) | `.5` as-is | 106.4 (-0.5%) | 207.7 (-1.0%) | 172.1 (-2.4%) | **136.0 (-13.8%)** |
+| `kfast0` (boot 05:51) | `ctl5` + `STRATA_KV_RESIDENT_FAST=0` | 104.7 (-2.1%) | 208.0 (-0.9%) | 170.0 (-3.6%) | **137.6 (-12.8%)** |
+| `mmerge` (boot 06:07) | `ctl5` + `STRATA_MTP_MERGE_FAST=0` | 106.3 (-0.6%) | 208.2 (-0.8%) | 170.5 (-3.3%) | **132.4 (-16.1%)** |
+| `.4` anchors | `ctl22` / `ctlA` / `ctlB` | 108.1 / 107.3 / 105.5 | 208.4 / 211.3 | 179.8 / 172.8 | 160.5 / 146.9 / 166.1 |
+
+Read:
+
+- the three `.5` boots cluster at **132-138** at 131K (3.9% apart) while the three `.4` boots sit at
+  **147-166** (13.1% apart): every `.5` boot is below every `.4` boot, and the spread inside `.5` is
+  *tighter*, so this is not the band moving;
+- the two candidate explanations we could reverse from our side (`KV_RESIDENT_FAST`, `MTP_MERGE_FAST`)
+  were each reversed in a dedicated boot and neither moved 131K by more than the replicate noise -
+  the regression is not one of the two new all-CUDA defaults;
+- the same shape repeats at 98K (170.0/170.5/172.1 vs 172.8/179.8, ~-3%) and disappears at 8K/50K
+  (all within +-2%), i.e. it is a **depth-dependent** cost, consistent with `.5`'s "decode round 5"
+  work being aimed at RTX 50 long-dialog paths;
+- `dxr` (the DX/long-scorer bundle) was not run - the queue was closed once the verdict was clear.
+
+**Decision: not adopted.** Production stays on `v0.2.15-nvfp4.4` (`/data/work/bump-src`). Per the
+whole-version policy we do not cherry-pick, so `.5` is re-read at the next `-nvfp4.x` tag; the evidence
+we hand upstream is the table above (3 boots x 4 depths, byte-identical launch, V100 SXM2, sm70 tables
+on, `STRATA_DECODE_TIMING=1`).
+
+**Operational defect found and fixed while closing the queue:** `armf5.sh` reads `FW`/`GEN` from its own
+environment, but the queue passes them as positional args (`FW=1`), so the full-window arm silently
+skipped its `fullwindow.py` step - the fix exports the named args before use.  Also recorded: killing an
+arm is not enough, the `strata-nvfp4-run.sh start` supervisor and its `serve.server` front respawn the
+engine; the kill order is queue -> arm -> supervisor -> front -> vision helper -> engine, verified by
+pid stability over 10 s.

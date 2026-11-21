@@ -24,7 +24,7 @@ when bit-exactness or risk justified it.
 | `STRATA_PIPE_ADAPT_EVERY` | 8 | pipelined batch rings never adapt the VRAM expert tier otherwise | adopted with batchenv |
 | `STRATA_BATCH_SELF_COMMIT` | 0 | measured negative in paired test | kept off |
 | `--aux-cpus auto` | auto | offload helper work to spare cores | wall −12.9% (64K) / −13.3% (131K), thread-only, zero quality risk |
-| `--conversation-cache-mib 98304 --conversation-cache-slots 32` | slots ×2, budget ×0.75 | parked-chain capacity is the ceiling that actually bites under concurrency: on the production lane 20 live conversations relayed **0/40** continuations at `slots 16` and **40/40** at `slots 32`; median turn prefill **6574 ms → 1306 ms** (5.0×) | control arm: a *fresh* engine at `slots 16` also relayed 0/40 (6662 ms), so the win is the slot count, not a clean cache.  tg8k 55.9 (B4 band), det ×3 identical.  Budget kept below the old value so worst-case RAM falls while capacity doubles |
+| `--conversation-cache-mib 98304 --conversation-cache-slots 32` *(the mib value is superseded: `49152` adopted 2026-11-17, see the CC entry below; `slots 32` still ships)* | slots ×2, budget ×0.75 | parked-chain capacity is the ceiling that actually bites under concurrency: on the production lane 20 live conversations relayed **0/40** continuations at `slots 16` and **40/40** at `slots 32`; median turn prefill **6574 ms → 1306 ms** (5.0×) | control arm: a *fresh* engine at `slots 16` also relayed 0/40 (6662 ms), so the win is the slot count, not a clean cache.  tg8k 55.9 (B4 band), det ×3 identical.  Budget kept below the old value so worst-case RAM falls while capacity doubles |
 
 ## Adopted — multimodal (vision), ship default on
 
