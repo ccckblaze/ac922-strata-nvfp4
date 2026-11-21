@@ -694,6 +694,45 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.24 - the .5 wave: a second tree has to carry the vision helper, a killed arm leaves an orphan boot that holds the lock, and our own window anatomy re-ranks the next attack (11-22 05:2x-, 6 cards)
+
+- **The `.5` boot died before it ever answered health, and the reason was not the engine.** The lane
+  launcher resolves the multimodal helper inside the source tree it is booting
+  (`$SRC/build-vision/bin/strata-vision`), and only the `.4` tree had ever been built there, so
+  `serve/lifeline.py:292` raised `FileNotFoundError` and the front exited while the C++ engine was
+  still loading.  Fixed with one symlink (`ln -s /data/work/bump-src/build-vision
+  /data/work/bump5-src/build-vision`); the helper is a separate process and this wave sends no images,
+  so reusing the `.4` build is measurement-neutral.  The rule for a new tree: run the boot once,
+  read the *boot* log (`$TAG.out.boot`), and only then trust the arm - the arm runner's own
+  `GEOMETRY-PASS` line is what tells you whether the engine came up at all.
+- **A killed arm is not a clean kill.** `armf5.sh` takes its single-instance lock on fd 9 and then
+  execs `lane.sh restart`, which inherits that fd; killing the arm leaves the lane restart alive and
+  holding the lock.  The relaunched queue then got `ARM-ctl5 ALREADY-RUNNING` (rc=2) in under a
+  second, moved on to its next arm, and started a **second boot against the same six cards** - which
+  is how a queue silently produces two engines and zero trustworthy rows.  Two fixes: the runner now
+  closes the lock fd for children (`bash "$LANE" 6 restart 9>&-`), and the cleanup order is
+  queue -> arm -> `lane.sh` -> engine, verified by `pgrep` before any relaunch.
+- **The 1Cat retention-default hazard does not exist in our engine** (read-only audit, closed). The
+  upstream incident (`1Cat-vLLM c5efe9f0a0`, 4x V100 + Flash-Next + host-KV: a periodic retention
+  checkpoint at 8192 evicted other sessions' tail state and forced full re-prefills, 28.9 -> 90.4
+  tok/s) has no analog here: `strings` on our binary finds no retention knob, and our policy is
+  `include/strata/program/conv_cache.hpp` - the chain's **root is pinned** and every other slot
+  rotates by least-recent-use, with the pin switching off only under a two-slot budget
+  (`eviction_victim`, `cap < 2`).  We run `--prompt-cache 6`, so the pin is on.  What *is* shared with
+  that incident is the structural premise stated in the same header: the KV arena "holds one branch of
+  history at a time", which is exactly why cross-session deep windows re-read - the cold/warm asymmetry
+  and the DRIFT-UNIQ observations are this, not a mis-set default.
+- **Our own window anatomy re-ranks the queue** (PERFORMANCE 5a, chart
+  `results/charts/ac922-anatomy-2026-11-22.png`). Pooling 6 755 `STRATA_DECODE_TIMING` lines from this
+  night's boots: the GPU-executed body is flat at ~20 ms from short to deep windows while the
+  host-CPU expert term goes 0.52 -> 17.48 ms and swaps 0.2 -> 16.8/window; GPU-reach wait is a flat
+  9-12%, not the sister box's 28%.  Consequences taken seriously by this wave: the deep-window money
+  is in *delivery* (complement NUMA placement, fetch overlap, resident coverage, adapt period), all of
+  it quality-neutral; the tensor-core expert kernel (ticket 8/QPN2) attacks a body that is 38% of a
+  deep window, which is why the sister box measured it net-negative in serving and why we keep it
+  parked; and the third anchor (`ctlB`, same env as `ctlA` and `ctl22`) widened the 131 K boot-to-boot
+  spread to 13.1%, so single-boot deep deltas below ~15% are now reported as unresolvable instead of
+  neutral.
 ### H.23 - reading the .5 bump before running it; the noise floor came free, and one arm was deleted before it cost a boot (11-22 03:55-04:3x, 6 cards)
 
 - The bump is upstream `v0.2.15-nvfp4.5`, merged into our line as `b352a38148`; the launcher knobs
