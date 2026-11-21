@@ -160,6 +160,7 @@ if batch<2 and groups<2 and ncard in (4,6):
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
 if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"])
+if os.environ.get("RESIDENT_GIB") is not None: setflag("--resident-budget-gib",os.environ["RESIDENT_GIB"])   # 0 = the arena-off replica proxy (expert streaming straight from the page cache)
 # warm-resume geometry: a continuation re-reads back to the last checkpoint, and checkpoints land on
 # prefill chunk boundaries spaced ceil(PROMPT_CACHE_EVERY / chunk) chunks, so BOTH knobs have to move
 # together (EVERY <= chunk) or the gap floor stays at the chunk.  Unset = the shipped config's value.
