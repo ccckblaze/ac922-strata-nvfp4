@@ -694,6 +694,62 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.23 - reading the .5 bump before running it; the noise floor came free, and one arm was deleted before it cost a boot (11-22 03:55-04:3x, 6 cards)
+
+- The bump is upstream `v0.2.15-nvfp4.5`, merged into our line as `b352a38148`; the launcher knobs
+  of our line came over it as `8e1f0eb04` (branch `nvfp4.5`).  It does *not* move the engine version
+  string: `project(strata VERSION 0.1.61)` in both trees, so `strata --version` answers `0.1.61` for
+  .4 and .5 alike.  Provenance is the binary's knob inventory instead:
+
+  ```sh
+  strings build/strata | grep -E '^STRATA_[A-Z0-9_]+$' | sort -u | wc -l   # 870 on .4, 899 on .5
+  ```
+
+  The binary production is serving right now carries the .4-only `STRATA_PF_REFILL_BG_API` and
+  `STRATA_SCORES_DX` and none of the .5-only `STRATA_KV_RESIDENT_FAST` / `STRATA_MTP_MERGE_FAST`,
+  which is how we know the box is still on .4 while both trees claim 0.1.61.
+- Of the 30 names .5 adds, three apply to every CUDA card rather than only to the RTX 50 table:
+  `STRATA_KV_RESIDENT_FAST` (`src/kernels/cuda/kv_stream.cu:401`, `env_int("...", 1)`: on unless 0),
+  `STRATA_MTP_MERGE_FAST` (`src/kernels/cuda/qsa_decode_attn.cu:1635`: on unless 0) and the opt-in
+  drafter-attention pipeline `STRATA_MTP_ATTN_PIPE` (:1630).  `src/core/nv_defaults.cpp` has sections
+  for 8.6, 6.0, 12.1 and 12.0 and *none* for 7.0, so `MTP_PDL`, `SCORES_DX`, `SELECT_LONG(_AT)` are
+  not silently adopted on V100 by the bump; the DX kernels do build for any card once the name is
+  set (`qsa_select.cu:3576-3600`: unset means 6.x only, `=1` means any card), so pricing DX with an
+  env arm is honest on both trees.
+- One planned arm was deleted before it ran.  `STRATA_SESSION_GROW` reads like a free 320 expert
+  slots per card, but `src/program/generate.cpp:8122` gates session-elastic tables on
+  `o.batch <= 1` (and on `--kv-resident > 0`, which we ship), so with the shipped `--batch 6` it is
+  inert by construction: an arm would have measured the noise and called it the ticket.  Read the
+  condition, not the documentation line - this is METHODOLOGY section 2 in practice.
+- The anchor replicate came free, and it is the number that matters for everything else tonight.
+  `ctlA` reruns `ctl22`'s env on the same binary 3 h 38 min later, same six cards, same shape
+  (`pipelined, 3 groups of 2`), four depths:
+
+  | depth | sum_tg | tg_med | rows/step ctl22 -> ctlA |
+  |---|---|---|---|
+  | 8 000 (cold) | 108.1 -> 107.3 (-0.7%) | 12.8 -> 12.9 (+0.8%) | 3.42 -> 3.43 |
+  | 50 000 | 208.4 -> 211.3 (+1.4%) | 33.9 -> 35.4 (+4.4%) | 3.35 -> 3.36 |
+  | 98 000 | 179.8 -> 172.8 (-3.9%) | 28.8 -> 28.2 (-2.1%) | 3.39 -> 3.35 |
+  | 131 000 | 160.5 -> 146.9 (-8.5%) | 26.1 -> 23.5 (-10.0%) | 3.24 -> 3.27 |
+
+  rows/step agrees to two decimals at every depth, so the shape is not moving: what moves is the
+  speed *inside* a window, and it moves by 8-10% at the deep end between two boots of an identical
+  lane.  Consequence, written before any arm is judged: one boot resolves a deep-window effect only
+  above about 9%, so this wave carries a second anchor at its end (`ctlB`, 8K/131K) and arms are read
+  against that band, not against the 1.5% we use within a boot.
+- The shallow row is not a decode number.  At 8 000 the prompts are cold (reused 0%), so admission
+  and prefill dominate: TTFT 5.82 -> 35.34 s across the six streams and per-stream tg 7.3 -> 43.5 in
+  the same burst, `sum_tg` 107.3 against `wall_tg` 43.3.  The two calibers are defined at
+  `note312/aggbench.py:11-13` (sum of per-stream rates vs tokens per wall span); the gap is prefill
+  serialization, and quoting 8K's sum_tg as a decode ceiling would be wrong.
+- Provenance hygiene found one real inconsistency, in our own tooling rather than in the service:
+  `/data/work/bump-src` is checked out at `90ca0bdcc7` (docs-era, whose `src` tree hash differs from
+  main's) while the `build/strata` inside it is the .4-era binary that was built before that reset -
+  the .4 bump commits are ancestors of `10b5df1a76`, not of that checkout.  Nobody served the wrong
+  engine, but nobody could have rebuilt that tree and got the same engine either.  Both trees used by
+  this wave are pinned to a commit that matches what they run before any measurement is taken.
+- Open when this entry was written: the Q2 (.4) and Q3 (.5) arm tables and the bump decision.
+
 ### H.22 - 4-card batch-shape calibration: the analysis's sweet spot was wrong, 4/4 wins; the noise floor got an accidental 3-boot replicate (11-21 evening, 4 cards)
 
 - An upstream-style analysis claimed the 4-card aggregate sweet spot is `--batch 4

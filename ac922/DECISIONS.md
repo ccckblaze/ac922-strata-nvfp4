@@ -623,3 +623,24 @@ decode, n=4, wall_tg medians:
   of 1, 6-card 3 of 2).  Full-window smoke on the adopted shape: 4/4 `prompt_exact`
   at 261,632 (prompt+gen = 262,144 exactly), 3/4 held the edge, one stream EOS-early
   at 372/512 (content, same family as the 6-card precedent); sum_tg 117.2, span 21.4 s.
+
+## Standing rules from the 11-22 night wave (6 cards, .4 anchor + .5 read-through)
+
+- **Bump provenance is the binary's knob inventory, not `strata --version`.**  Upstream kept
+  `project(strata VERSION 0.1.61)` across the `v0.2.15-nvfp4.4` -> `v0.2.15-nvfp4.5` bump, so the
+  version string cannot separate the two.  `strings build/strata | grep -E '^STRATA_[A-Z0-9_]+$'`
+  gives 870 names on .4 and 899 on .5; identifying one .5-only name (`STRATA_KV_RESIDENT_FAST`) in a
+  binary is decisive, and its absence proves a tree is serving .4 whatever it reports.  Every
+  adoption entry from now on names a commit *and* one marker knob.
+- **A single boot cannot judge a deep-window ticket.**  Two boots of an identical .4 lane, 3 h 38
+  apart, differ by -8.5% sum_tg / -10.0% tg_med at 131K while rows/step agrees to two decimals
+  (3.24 vs 3.27), against +-1.5% inside a boot.  So: effects above ~9% at the deep end may be called
+  from one arm; anything smaller is "not resolved at this power" and needs same-boot pairing (only
+  the four request-level knobs - `spec_min_p`, `pcie_frac`, `prefill_pipe`, `aux_cpus` - can be
+  switched per request without a restart, see `serve/server.py:1697-1712`) or a replicated boot.
+  This wave ends with a second anchor for exactly that accounting.
+- **Rejected without a measurement: `STRATA_SESSION_GROW` as a ticket on this lane.**  It is not a
+  judgment about speed - the mechanism cannot fire here: `generate.cpp:8122` requires
+  `o.batch <= 1`, and the shipped shape is `--batch 6`.  An arm would have produced a pure-noise
+  delta and it would have looked like a neutral result.  Reading the gating condition before booking
+  a boot is now part of wave planning (METHODOLOGY section 2).
