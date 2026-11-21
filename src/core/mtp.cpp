@@ -2067,7 +2067,11 @@ bool MtpDrafter::capture_cond(int T, int steps) {
         np.conditional.type = cudaGraphCondTypeIf;
         np.conditional.size = 1;
         cudaGraphNode_t node = nullptr;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 12070
         ok = cudaGraphAddNode(&node, top, &prev, nullptr, 1, &np) == cudaSuccess;
+#else
+        ok = cudaGraphAddNode(&node, top, &prev, 1, &np) == cudaSuccess;   // 12.4 (our CUDA) has no edgeData overload
+#endif
         if (!ok) break;
         CondCap cb;
         cb.body = np.conditional.phGraph_out[0];
