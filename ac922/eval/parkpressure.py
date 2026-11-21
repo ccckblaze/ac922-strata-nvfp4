@@ -131,8 +131,10 @@ def main():
                    for i in range(nshort)]
     t0 = time.time()
     short = wave(short_stems, short_tok)
-    sr = [round(100.0 * sum(t["reused_pct"] or 0 for t in c) / max(1, len(c)), 1) for c in short]
-    print("short wave: %d chains, reuse %s (%.0f s)" % (nshort, json.dumps(sr), time.time() - t0),
+    # only the follow-up turn of each short chain is a reuse measurement; the first turn is cold by
+    # construction, and averaging it in reads as "50% reuse" on a lane that reused 99.6%
+    sr = [round(t[1]["reused_pct"] or 0.0, 1) if len(t) > 1 else None for t in short]
+    print("short wave: %d chains, follow-up reuse %s (%.0f s)" % (nshort, json.dumps(sr), time.time() - t0),
           flush=True)
 
     t0 = time.time()
