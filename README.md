@@ -32,8 +32,9 @@ and it reports byte-exact `prompt_tokens + completion == 262,144`, never "98.7% 
 | Cold prefill, deepest measured point | 3,563 tok/s @ 210K (ship shape; 262K cold not re-taken) | 7,016 tok/s @ 261,494 |
 | Single-stream decode @ 8K / @ 210K | 69.9 / 66.8 tok/s | 82.1 / 81.1 tok/s |
 | Single-stream decode @ ~65K | 72.1 tok/s (median of 10 rounds; the two runs read 75.4 / 70.8) | 80.3 tok/s (one shot) |
-| Full-window concurrency | **4 × 262,136 live · agg 109.3 · `held_edge` 4/4** (23.8–31.3/stream; the two boots before the binary switch read 105.8 / 108.0) | 6 × 262,136 live · agg 145.6 (20.7–32.4/stream) |
-| Short-window concurrency @ 8K | agg 138.6 (34.7/stream) | agg 240.1 (39.7/stream) |
+| Full-window concurrency | **4 × 262,136 live · agg 107.4 · `held_edge` 4/4** (median of three in-boot repeats on the shipping binary, 2026-11-22; the two boots of the previous binary read 105.8 / 108.0) | 6 × 262,136 live · agg 145.6 (20.7–32.4/stream) |
+| Short-window concurrency @ 8K | agg 159.2 (39.8/stream; parking floor 4096, 2026-11-22 — 138.6 under the old 32768 floor) | agg 240.1 (39.7/stream) |
+| Second-turn TTFT, 2K–64K | parked ~0.4 s vs 4.5–10 s when the session never parked | not re-taken |
 | Warm 262K decode, single stream | 59.2 tok/s | not measured |
 | VRAM resident · RAM pinned | 58.0 GiB · 57.10 GiB (shipping-binary boot) | 85.3 GiB · 54.42 GiB |
 
@@ -41,8 +42,10 @@ Rows are the adopted ship state measured 2026-11-17 (`learned expert-profile` +
 `--trim-stage-weights` + the batched pipelined ring + the rebalanced `layer_split 9,24,37` with
 `--vram-reserve-mib 832`, adopted after the old shape respawned under load), published as the
 **median of two independent boots** because a single deep-window run carries ±15–25% boot noise.  The
-4-card full-window cell is the single boot of the binary this repository builds (the two boots of the
-same shape on the previous binary read 105.8 / 108.0, so the switch cost nothing); `eval/fullwindow.py`
+4-card full-window cell is three repeats inside one boot of the binary this repository builds (the two
+boots of the same shape on the previous binary read 105.8 / 108.0, so the switch cost nothing); the
+short-window cell and its TTFT row moved with the 2026-11-22 parking-floor adoption
+(`--conversation-cache-min-tokens 32768 → 4096`, `PERFORMANCE.md` §10); `eval/fullwindow.py`
 now reports it as `held_edge`, because the old condition — `completion == max_tokens` at
 `prompt+gen == total` — cannot be met at a byte-exact edge.  Single-run cells are marked `n=1` in
 `PERFORMANCE.md` §6e.  The 6-card column is the reference lane,

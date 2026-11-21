@@ -675,3 +675,39 @@ register kernel's reach, `TK_T * TK_PER = 1024 * 33 = 33 792` blocks, or in the 
 blocks - below the register reach - and the ladder's deepest arm (131K) is 16 384.  The `topk` arm's
 four deltas (-3.2 %, -0.0 %, +1.3 %, -1.8 %) are the cross-boot band of section 9a, nothing more.  Any
 future claim for this knob must first name a shape that reaches 33 792 blocks.
+
+## Adopted: `CC_MIN_TOKENS 32768 -> 4096` - the cold tier's park gate was taxing every short turn (2026-11-22)
+
+- **What was adopted.** One number in the production launcher env (`/data/work/lane.env`, backed up as
+  `lane.env.bak-final`): the conversation-cache park floor drops from 32,768 to 4,096 tokens.  No engine
+  code, no geometry, no numeric path; rollback is restoring the env line and `lane.sh 4 restart`.
+- **Why.** `--conversation-cache-min-tokens` is a *switch-time admission test for parking*, so below the
+  floor a conversation that loses its live slot between turns never has a snapshot to come back to and
+  re-prefills its own history (a follow-up sent while the session is still hot reuses fine under the
+  floor - 98.5 % at 1,869 ptok - the taxed turn is the post-eviction one, which concurrent traffic
+  manufactures constantly).  The 32,768
+  we shipped with the NVMe cold tier on 11-20 therefore silently moved the whole sub-32K band out of the
+  cache.  Measured on the ship boot: 8K x 4 aggregate `sum_tg` 78.3 / 94.9 with 25 % / 0 % prompt reuse,
+  i.e. **below** the lane's own 245K x 4 band (115.8 / 90.5 at 100 % reuse) - a short window slower than
+  a long one.  With the floor at 4,096: 151.7 / 159.2 / 171.4 at 99.9 % reuse (+84 % median), and 245K x
+  4 unchanged (114.1 / 97.1).  Full tables: `PERFORMANCE.md` §10.
+- **The counter-test that made it safe.** Upstream's reason for the flag is that short side requests
+  should not evict the long conversation they are interleaved with (`docs/DETAILS.md:731`).  That is the
+  risk, so it is the thing to price: `eval/parkpressure.py` builds 2 chains at 133,582 tokens, lets them
+  park, runs a wave of 16 short two-turn chains through the same cache, then resurrects the deep chains.
+  Result `PARKPRESSURE-PASS`: reused 100 %, TTFT 2.09 s, **COLD = 0**.  The two bounds do the work -
+  32 slots and 48 GiB, against ~0.02 MB/token parked footprint - so a short wave is a few GiB and cannot
+  crowd out the deep chains (they came back from RAM, not from the 6.9 s disk median, let alone the 37 s
+  cold recompute).
+- **Gates.** `QUALGATE-PASS` on the candidate boot (`det` x3 against the anchor, `acc-drift-ok 0.953`,
+  the same four `relay-cell-drift` WARNs as the ship boot), and the ship invariant held:
+  `FULLWINDOW-PASS 4/4 held the window edge at prompt+gen=262136`.
+- **Why 4096 and not upstream's 0.** The no-gate arm was measured as a side experiment and behaves the
+  same above ~2K (follow-up TTFT 0.38-0.50 s at 2,061-20,061 tokens), but `0` lets a one-shot 200-token
+  request occupy one of the 32 slots.  4096 keeps the protection the flag exists for while covering every
+  real chat/agent turn.
+- **Process note (the part worth keeping).** This regressed for two days invisibly because every gate run
+  after the 11-20 adoption measured the deep band: resurrection, full window, 131K/245K aggregates, det,
+  acc-drift.  Nothing looked at a *second turn* of a *short* conversation.  `scripts/lanecheck.sh` now
+  grades short-band and deep-band turn reuse from the engine's own completion lines on every hand-back,
+  with WARN at <50 % short reuse.

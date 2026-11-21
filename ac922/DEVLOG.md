@@ -694,6 +694,55 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.26 - a same-boot anchor meant to decorate a table found a 2x short-window tax, and the gate that let it hide for two days (11-22 07:0x-08:0x, 4 cards)
+
+- **How it surfaced.** H.25 left one optional item: give the ship table a same-night 4-card aggregate
+  anchor.  `aggbench --n 4 --depth 8000` came back 78.3 and 94.9 `sum_tg`, where the same lane's own
+  history is 133.6-143.0 and the 6-card box's 8K x 6 is ~210.  The first instinct was boot luck; the
+  second was the reuse column: **0-25 % at 8K against 100 % at 245K**.  A short window was slower than a
+  long one, which is the anomaly the user has been pointing at since the "4 卡的 36.8 tg" complaint.
+- **The mechanism is one flag, and the engine names it in its own log.** `--conversation-cache-min-tokens`
+  is a park-admission test: `conversation cache: skip parking (6972 tokens, below the 32768 minimum;
+  parked=11)`.  Below the floor nothing is snapshotted, so a turn that arrives after the conversation has
+  lost its slot re-prefills the history — ~7 s at 8K, ~10 s at 20K, against ~0.4 s from a parked chain
+  (`eval/turnprobe.py`).  The ship-boot sweep sharpened this: an *immediate* follow-up reuses fine even
+  under the floor (98.5 % at 1,869 ptok, live slot), so the taxed turn is the post-eviction one — which
+  is what `aggbench`'s round-robin manufactures and an idle probe never sees.  We shipped that floor on
+  11-20 with the NVMe cold tier (§8, `runbook 327`) to stop small requests crowding the slots.
+- **Ship-boot re-proof (pid 121620).**  `lanecheck 4` 9 ok / 3 warn (no eviction yet so no `disk hit:`
+  line; standing NUMA first-touch; graded pre-request), `FULLWINDOW-PASS 4/4` `sum_tg` 123.9, `aggbench`
+  8K x 4 one rep 131.0 at 99.9 % reuse (adoption trio was 151.7/159.2/171.4 — short-band single reads
+  carry spread too), `turnprobe` 2K-64K follow 0.28-0.37 s at 98.5-100 %.  Numbers in `PERFORMANCE.md`
+  §10c.
+- **Adopting it was not the same as pricing it.** §8's own sentence is "No PP/TG/VRAM regression" — and
+  every gate that ran afterwards (resurrection, full window, 131K/245K aggregates, `det`, acc-drift, the
+  whole .4/.5 wave) measured the deep band.  Nobody looked at a second turn of a short conversation.
+  Two days of green gates sat on top of a 2x short-window regression.
+- **What closed it.** `eval/parkpressure.py` (new): 2 deep chains at 133,582 tokens park, a wave of 16
+  short two-turn chains runs through the same cache, then the deep chains are resurrected.  Under the
+  candidate floor it is `PARKPRESSURE-PASS` - reused 100 %, TTFT 2.09 s, COLD = 0 - because 32 slots plus
+  48 GiB against a ~0.02 MB/token parked footprint means the short wave is a few GiB.  With that, the
+  floor drops to 4096: 8K x 4 151.7 / 159.2 / 171.4 (+84 % median), 245K x 4 unchanged (114.1 / 97.1),
+  `FULLWINDOW-PASS 4/4`, `QUALGATE-PASS` with the identical four relay-cell WARNs.  Ledger:
+  `DECISIONS.md`, tables: `PERFORMANCE.md` §10.
+- **Why not upstream's default 0.** The no-floor arm was measured as a side arm (it is what the botched
+  `setmintok` quoting produced at 07:46, and the lane answered correctly: follow-up TTFT 0.38-0.50 s from
+  2,061 to 20,061 tokens).  It behaves the same above ~2K, but `0` lets a one-shot 200-token request hold
+  one of 32 slots, which is the eviction the flag exists to prevent.  Keep 4096; note that the accident
+  became an arm (standing lesson 19).
+- **Two harness truths learned the hard way this morning.** (a) `FILL` is 26.6 prompt tokens per copy on
+  this tokenizer, not 48: a "148K" fixture was quietly 74K, and a depth sweep whose labels are half the
+  claimed size cannot show a switch point.  Both new probes now measure tokens-per-unit from the engine
+  before building payloads.  (b) A config-change arm needs its *counter*-test designed before its
+  favourable test, or it will look green: the favourable half (short band recovers) was 4 minutes of work,
+  the counter-half (does it starve the deep chains?) is the reason this is adopted rather than queued.
+- **New standing piece: `scripts/lanecheck.sh`.** Read-only, anchors on the newest `engine started:`
+  banner, and grades what this lane has to be doing: single boot, no OOM lines, the shape/layer-split/
+  resident-RAM/cold-tier proof lines, NUMA placement, **short-band and deep-band turn reuse and tg from
+  the engine's own completion lines**, draft acceptance, KV/file-tier hits, conversation-cache state,
+  per-card VRAM including a warning when a non-ship card is occupied, and MemAvailable.  Exit
+  0/1/2.  Run it on every hand-back - it is the check that would have caught this on 11-20.
+
 ### H.25 - the ship invariant re-proved three times in one boot, and it did not agree with itself (11-22 06:30-07:2x, 4 cards)
 
 - **What this was.** After H.24's hand-back, the full-window cell on the *shipping* lane had still only
@@ -1226,3 +1275,9 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     `fullwindow.py` predated the `held_edge` fix while the DEVLOG described the fixed behaviour.  Before
     citing a correction, grep the artifact that carries it (and diff the deployed copy against the repo).
 
+19. A misquoted shell variable is an unplanned arm, and a good lane records it as one.  A `printf` that
+    expanded `$MIN` locally wrote `CC_MIN_TOKENS=` (empty) into `lane.env`, booting the no-floor
+    configuration minutes before the planned 4096 arm.  The lane answered correctly (park-all TTFT
+    0.38-0.50 s, short band fixed), so the accident became the side evidence that killed upstream's
+    default of `0` for a different reason - slot squatting by 200-token one-shots.  Never quietly
+    re-roll a boot to erase the accident: harvest it, label it, and say which quoting rule made it.

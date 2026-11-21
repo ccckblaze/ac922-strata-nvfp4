@@ -19,7 +19,8 @@ actually ran; nothing is aspirational.
 | Single-stream decode @ 210K | 66.8 tok/s | 81.1 tok/s |
 | Full-window concurrency | **4 × 262,136 live, agg 107.4 tok/s, `held_edge` 4/4** (median of three reads in one boot, 2026-11-22; the 2026-11-17 pair is 105.8 / 108.0) | 6 × 262,136 live, agg 145.6 (20.7–32.4/stream) |
 | Full-window concurrency, 3-way floor | 3 × 262,136 live, agg 85.7, 3/3 `finish=length` | not measured |
-| Short-window concurrency @ 8K | agg 138.6 (34.7/stream) | agg 240.1 (39.7/stream) |
+| Short-window concurrency @ 8K | agg 159.2 (39.8/stream; parking floor 4096, 2026-11-22 — was 138.6 under the 32768 floor) | agg 240.1 (39.7/stream) |
+| Second-turn TTFT, 2K–64K | parked ~0.4 s vs 4.5–10 s unparked (floor 4096) | not re-taken |
 | Deep concurrency @ 245K | agg 103.5 (wall 79.6 s) | agg 135.2 (wall 93.6 s) |
 | Warm 262K decode, single stream | 59.2 tok/s | not measured |
 | VRAM resident | 58.0 GiB (14.4–14.8/card) | 85.3 GiB (14.0–14.8/card) |
@@ -33,10 +34,11 @@ carries ±15–25% boot noise, so no number here comes from one boot alone unles
 the 6-card column predates that rebalance.  Full table with calibers: `PERFORMANCE.md` §6d–6e.
 
 One caliber caveat, stated rather than hidden: the 4-card *ladder* rows above (cold pp,
-single-stream tg, the 8K/245K aggregates) were taken on engine 0.1.59 the day the shape was adopted.
-The engine has been bumped since (`PERFORMANCE.md` §7), and only the full-window row has been
-re-proved on the shipping binary (2026-11-22, `PERFORMANCE.md` §9f).  Re-laddering that column on the
-shipping engine is booked as open debt, not forgotten.
+single-stream tg) were taken on engine 0.1.59 the day the shape was adopted.  The engine has been
+bumped since (`PERFORMANCE.md` §7); on the shipping binary the full-window row (2026-11-22,
+`PERFORMANCE.md` §9f) and the 8K/245K aggregates plus the parking floor (2026-11-22, §10) have been
+re-proved.  Re-laddering the cold-pp and single-stream-tg cells on the shipping engine is booked as
+open debt, not forgotten.
 
 **Ship invariant — 满窗是前提.**  The window is never the thing that gives: if a change cannot hold
 4 concurrent byte-exact full-window streams on the shipped 4-card lane, the ship shape drops to

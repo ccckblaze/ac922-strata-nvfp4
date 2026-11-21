@@ -605,3 +605,97 @@ the `.4` tree, `--batch 4 --batch-groups 4`, `--spec 8`, `--layer-split 9,24,37`
   waiting on a `Q3-END` marker that will never arrive (`/root/queue4.sh`, plus a watchdog set to stop
   the dead queue at 07:29) - killed, because a queue that wakes after handback restarts the lane under
   the operator's feet.
+
+## 10. The parking gate was taxing every short turn: `CC_MIN_TOKENS` 32768 -> 4096 (2026-11-22, adopted)
+
+Found while trying to add a same-night 4-card aggregate anchor to §6e.1: the shipping lane's short-band
+numbers did not match their own history.
+
+| band (`--n 4 --gen 256`, same boot, ship config CC_MIN_TOKENS=32768) | reused | sum_tg | wall_tg | rows/step |
+| --- | ---: | ---: | ---: | ---: |
+| 8K x 4, rep 1 (ptok 7,932) | 25.0 % | **78.3** | 34.0 | 1.74 |
+| 8K x 4, rep 2 | 0.0 % | **94.9** | 39.4 | 1.74 |
+| 245K x 4, rep 1 (ptok 242,940) | 100 % | 115.8 | 88.3 | 1.70 |
+| 245K x 4, rep 2 | 100 % | 90.5 | 62.2 | 1.71 |
+
+Three things are wrong with that table, and only the first was news:
+
+1. **8K x 4 aggregates below 245K x 4.** A short window should be the fastest band we have; the whole
+   pre-§8 history reads 133.6 / 135.6 / 138.6 / 139.3 / 143.0 (and the 11-19 cutover boot measured
+   8K x 6 at 240.8 / 253.7, i.e. ~160 rescaled to four streams).
+2. The reuse column explains it: **the short band reuses 0-25 %, the deep band 100 %.** The lane says so
+   itself - `conversation cache: skip parking (6972 tokens, below the 32768 minimum; parked=11)`.
+   `--conversation-cache-min-tokens` decides who is worth a parked snapshot, so below the gate a
+   conversation that loses its live slot between turns has nothing to come back to and re-prefills its
+   own history.  The ship-boot sweep refined that boundary: a follow-up sent while the session is still
+   hot reuses fine *under* the floor (98.5 % at ptok 1,869), so what the gate taxes is the post-eviction
+   turn - which is exactly what four round-robin streams manufacture, and why `aggbench` collapsed while
+   an idle-lane `turnprobe` never showed it.
+3. It is also the mechanism behind the operator's "short window feels slower than it should".  Measured
+   per turn (`eval/turnprobe.py`, cold / repeat / follow-up):
+
+   | ptok | cold TTFT | follow-up TTFT (parked) |
+   | --- | ---: | ---: |
+   | 2,061 | 4.46 s | 0.38 s |
+   | 4,053 | 5.41 s | 0.41 s |
+   | 8,061 | 7.12 s | 0.47 s |
+   | 16,053 | 8.97 s | 0.50 s |
+   | 20,061 | 10.17 s | 0.46 s |
+
+   (park-all boot, i.e. the arm with no gate at all - the follow-up column is what the band looks like
+   once the conversation is allowed to park; reuse 98.7-99.9 % at every depth.)
+
+### 10a. The counter-test, because parking small things is what upstream warned about
+
+`docs/DETAILS.md:731` gives the flag's purpose in one line: park only conversations of at least N
+tokens, "so short side requests do not evict a long conversation".  §327 (2026-11-20, the cold-tier
+adoption) chose 32768 to protect the parked long chains and priced the *resurrection* win; nobody priced
+the *short-band* cost, because every gate run afterwards measured the deep band.  `eval/parkpressure.py`
+is that price: build 2 deep chains, let them park, push a wave of 16 short two-turn conversations
+through the same cache, then resurrect the deep chains.
+
+| arm | deep chains | short wave | deep resurrect | verdict |
+| --- | --- | --- | --- | --- |
+| CC_MIN_TOKENS=4096 | 2 x 133,582 (cold prefill 37.7 s each) | 16 x 8,000, follow-up reuse 99.3-99.9 % | TTFT **2.09 s**, reused **100 %**, **COLD = 0** | **PASS** |
+
+So the small conversations do not displace the long ones: the long chains still come back from RAM in
+about 2 s instead of the 6.9 s disk median or the 37 s cold recompute.  The reason is the two bounds
+working together - `--conversation-cache-slots 32` caps the count and CC 48 GiB caps the bytes, and a
+parked conversation costs ~0.02 MB/token, so the entire short wave is a few GiB.
+
+### 10b. The adopted arm, same protocol, 4-card ship lane
+
+| band | CC_MIN_TOKENS=32768 (2 reps) | **4096 (3 reps)** | Δ |
+| --- | ---: | ---: | ---: |
+| 8K x 4 sum_tg | 78.3 / 94.9 (mean 86.6) | **151.7 / 159.2 / 171.4** | **+84 %** (candidate median vs ship mean) |
+| 8K x 4 wall_tg | 34.0 / 39.4 | **116.9 / 140.1 / 159.3** | ~4 x - the four streams now really decode in one span |
+| 8K x 4 reused | 25 % / 0 % | 99.9 % | the whole of the difference |
+| 245K x 4 sum_tg | 115.8 / 90.5 | 114.1 / 97.1 | +2 % median: unchanged, well inside the deep band |
+| full window 4 x 262,136 | `held_edge` 4/4 | `FULLWINDOW-PASS 4/4` | unchanged (that band was never gated) |
+| gate | `QUALGATE-PASS`, acc-drift 0.953 | `QUALGATE-PASS`, acc-drift 0.953, same four relay-cell WARNs | numerics untouched |
+
+**Decision: adopted, `CC_MIN_TOKENS=4096`** (launcher/env only; rollback is the recorded
+`lane.env.bak-*`).  Upstream's own default is `0` (park everything), which we measured as a side arm and
+which behaves the same above 2 K; we keep 4096 so that one-shot side requests stay out of the 32 slots,
+which is precisely what the flag exists for.
+
+### 10c. Ship-boot re-proof (pid 121620, same morning, `lane.env` line 20 = 4096)
+
+`lanecheck 4`: 9 ok / 3 warn / 0 fail - the warns are "no `disk hit:` line yet" (nothing had evicted),
+the standing NUMA first-touch item, and "no completed requests" (graded before the fixtures ran).
+`fullwindow`: `FULLWINDOW-PASS 4/4 held the window edge at prompt+gen=262136`, `sum_tg` 123.9 (inside
+the documented 106-126 repeat family).  `aggbench --n 4 --depth 8000`: 131.0 at 99.9 % reuse, one rep -
+below the 151.7/159.2/171.4 adoption trio but far above the 78.3/94.9 gated pair, and single short-band
+reads carry their own spread (§9f lesson).  `turnprobe` 2K-64K: cold 4.15-19.3 s, follow 0.28-0.37 s at
+98.5-100 % reuse across every depth, including the two below the floor (see the boundary note in §10
+point 2).
+
+Two honest notes:
+
+- A cold turn is not free even at 8 K (1,132 tok/s here against the 2,075 tok/s §6e.1 ladder point),
+  and the gap is not explained yet - the `request: parking the previous conversation` stage is charged
+  inside the request, so the parked regime pays for parking on the *next* request.  It is a PP-ladder
+  question, not a reason to keep the gate.
+- The deeper lesson is procedural and lives in `DEVLOG.md` (H.26): a config adoption must be priced in
+  every band it can touch, and `lanecheck.sh` now grades short-band turn reuse on every hand-back so a
+  regression like this cannot sit invisible for two days again.
