@@ -147,7 +147,11 @@ std::vector<std::pair<std::string, std::string>> nv_default_env(int major, int m
             // combine's count (with the next attention layer's indexer-tail snapshot on that branch); gdn_mid's tile copies after
             // its grid wait (their flood held the read up); route + doorbell in one launch, the rows first.  All bitwise;
             // nsys prose front GDN 77.6 -> ~72, attention 79.1 -> ~75 us.
-            {"STRATA_EARLY_READ", "1"},
+            // STRATA_EARLY_READ (the early read above) left the table in decode round 4 E4: serve e2 vs e2 + =0, 5 ABAB pairs, 600 W:
+            // struct 16.98 -> 16.73 ms/window (5 of 5), prose 8.83 -> 8.90 (noise); bitwise; =1 still turns it on (bench-d4 NOTES-d4.md E4).
+            // decode round 3 D6: PDL edges in the MTP draft graphs (their kernels read only weights before the wait): the same drafts
+            // (dumps identical), CLI fixed struct: chain steps 0.791 -> 0.774 ms a round (6 runs each), round graph 0.309 -> 0.305 (bench-d3 NOTES-d3.md D6).
+            {"STRATA_MTP_PDL", "1"},
             {"STRATA_GDN_MID_HEAD", "2"},
             {"STRATA_ROUTE_DB", "2"},
             // dec/pf-num (NOTES-pfnum.md): the prompt path's QSA block scores on int8 tensor cores (i8x6, ~2x the 3xTF32 kernel,
@@ -168,6 +172,21 @@ std::vector<std::pair<std::string, std::string>> nv_default_env(int major, int m
             // expert group's chain (gate/up, H quantize, down) replayed as CUDA graphs: under WDDM an eager launch costs ~10 us of
             // host and ~3 us of GPU idle.  The same kernels and arguments (bitwise); 64K read -2.7% at 600 W.
             {"STRATA_PF_GRAPH", "7"},
+            // decode round 5 F2 (= R5-1): past 32768 cells the decode windows take the long-context select graphs with the
+            // shuffle-free DX block scorer (block_scores_dx_kernel: each pooled key read once for all of the window's queries,
+            // bitwise the pairs kernel's scores, so the same ids); the cluster top-k is kept (STRATA_TOPK_MULTI stays off).
+            // Indexer scores 286 us/layer at T 8 at 370K were the long-context loss (gpu-probe DECODE-PLAN-R5.md); serve
+            // A/B in strata-r5 bench-r5 NOTES-r5.md F2.  STRATA_SELECT_LONG=0 (or STRATA_SCORES_DX=0) gives the old path.
+            // The threshold from qsa_front_bench (us/layer, pairs vs DX): DX is faster for T >= 2 from 24K cells (T 3: 8.43 vs
+            // 7.07, T 8: 19.7 vs 10.3) and slower below 16K (8K T 3: 4.17 vs 5.70).
+            {"STRATA_SELECT_LONG", "1"},
+            {"STRATA_SCORES_DX", "1"},
+            {"STRATA_SELECT_LONG_AT", "24576"},
+            // decode round 5 F6 (= R5-2): the MTP drafter's attention over its 32768-cell window on the pipelined chunk kernel
+            // (attn_chunk_draft_pipe_kernel: one wave of blocks looping over chunks, the next chunk's K/V copied during this
+            // one's softmax and fold; the same partials bit for bit).  Its fast merge (STRATA_MTP_MERGE_FAST) is on for every
+            // CUDA card.  Bench and serve A/B in strata-r5 bench-r5 NOTES-r5.md F6; STRATA_MTP_ATTN_PIPE=0 gives the old kernel.
+            {"STRATA_MTP_ATTN_PIPE", "1"},
         };
     }
     return t;

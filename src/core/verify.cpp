@@ -193,12 +193,14 @@ inline bool g_mmvq_il() { static const bool on = [] { const char* v = std::geten
 // both compute capability 6.x by default, the same ids and score bits).  Each costs ~6 more kernels a call, which only
 // a longer context pays back (4x GP100: 0.5 ms a window more at 1K, even at 30K, 4.0-4.7 ms less at 300K), so the
 // verifier keeps a second set of window graphs for it.  Off: no scratch, no second graphs.
+// r5 F2: built into every CUDA build; the sm_120 table (nv_defaults.cpp) turns it on with STRATA_SCORES_DX=1 (the DX
+// scorer only: the multi-CTA top-k stays off there) from STRATA_SELECT_LONG_AT=24576 cells; STRATA_SELECT_LONG=0: the old path.
 inline bool select_long_on() {
     static const bool on = [] {
         const char* v = std::getenv("STRATA_SELECT_LONG");
         if (v == nullptr || v[0] != '1') return false;
         if (strata::kernels::qsa_topk_multi_scratch_ints(1) <= 0) {   // a build without the multi-CTA kernels: no second graphs
-            std::fprintf(stderr, "strata verify: STRATA_SELECT_LONG=1 needs the CUDA build with STRATA_EXPERIMENTAL_SM60; "
+            std::fprintf(stderr, "strata verify: STRATA_SELECT_LONG=1 needs a CUDA build; "
                                  "ignored\n");
             return false;
         }
@@ -820,6 +822,9 @@ Verifier::~Verifier() {
     if (copy_) { cudaStreamSynchronize(copy_); cudaStreamDestroy(copy_); }
     if (side_) cudaStreamDestroy(side_);
     if (side2_) cudaStreamDestroy(side2_);
+    if (side3_) cudaStreamDestroy(side3_);
+    for (cudaEvent_t e : {afork_, ajoin_})
+        if (e) cudaEventDestroy(e);
     if (l2pf_s_) cudaStreamDestroy(l2pf_s_);
     if (pcb_s_) cudaStreamDestroy(pcb_s_);
     for (cudaEvent_t e : {pcb_fork_, pcb_join_, pcb_plan_})
@@ -1385,6 +1390,19 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
         cudaEventCreateWithFlags(&gfork_, cudaEventDisableTiming) != cudaSuccess)) {
         err = "verify: the mixer branch's stream / events could not be created";
         return false;
+    }
+    // dec3 D5 STRATA_IDX_FORK (default on with the side mixer, =0 in line): the indexer's append beside its query
+    // projection (the same kernels and inputs; the block scores join both).  qsa_front_bench: -0.9..-2.0 us a layer
+    {
+        const char* v = std::getenv("STRATA_IDX_FORK");
+        if (g_side_mixer() > 0 && side3_ == nullptr && (v == nullptr || std::atoi(v) != 0) &&
+            ((gprio ? make_stream(&side3_, gp_hi) : cudaStreamCreateWithFlags(&side3_, cudaStreamNonBlocking)) != cudaSuccess ||
+             cudaEventCreateWithFlags(&afork_, cudaEventDisableTiming) != cudaSuccess ||
+             cudaEventCreateWithFlags(&ajoin_, cudaEventDisableTiming) != cudaSuccess)) {
+            (void) cudaGetLastError();
+            if (side3_) cudaStreamDestroy(side3_);
+            side3_ = nullptr;   // in line
+        }
     }
     if (g_l2pf_mb() > 0 &&
         (cudaStreamCreateWithFlags(&l2pf_s_, cudaStreamNonBlocking) != cudaSuccess ||
@@ -2214,8 +2232,20 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                     if (!branch(mfork_, cs, side_, "fork")) return false;
                     idx_key(side_);
                     idx_snap(side_);
-                    idx_append(side_);
+                    // dec3 D5 STRATA_IDX_FORK: the append (after the key and the tail's snapshot) beside the query
+                    const bool afork = side3_ != nullptr && afork_ != nullptr && ajoin_ != nullptr;
+                    if (afork) {
+                        strata::dispatch::note("qsa layer: indexer append forked beside the query (STRATA_IDX_FORK)");
+                        if (!branch(afork_, side_, side3_, "fork")) return false;
+                        idx_append(side3_);
+                        if (cudaEventRecord(ajoin_, side3_) != cudaSuccess) { err = "verify: the indexer append's branch could not join"; return false; }
+                    } else
+                        idx_append(side_);
                     idx_query(side_);
+                    if (afork && cudaStreamWaitEvent(side_, ajoin_, 0) != cudaSuccess) {
+                        err = "verify: the indexer append's branch could not join";
+                        return false;
+                    }
                     idx_select(side_);
                     note_prio_tail(side_, 1);
                     if (cudaEventRecord(mjoin_, side_) != cudaSuccess) { err = "verify: the indexer's branch could not join"; return false; }
@@ -3707,6 +3737,7 @@ bool Verifier::run(int T, const int32_t* tokens, int64_t pos0, PoolMultiFn pool,
     if (!pre) refresh_ar();
     // STRATA_SELECT_LONG: the select kernels this window's context pays off with (the same on every stage)
     sel_long_ = select_long_on() && pos0 + T >= select_long_at() ? 1 : 0;
+    ++sel_windows_[sel_long_];   // r5 F2: the dispatch proof (select_long_windows)
     if (!capture(T, err) || !capture_commit(err)) return false;
     const bool chain = chain_overlap();
     if (chain) {   // capture the next stage's window here, on this thread, so the helper only stages and launches
@@ -5915,6 +5946,13 @@ void Verifier::diag_pipelined(std::FILE* f, const char* name) const {
                  rd(h_flagB_), ev(ev_done_), ev(ev_commit_), (int) commit_live_);
 }
 
+void Verifier::select_long_windows(uint64_t& plain, uint64_t& lng, int64_t& at, int64_t& dx) const {
+    plain = sel_windows_[0];
+    lng = sel_windows_[1];
+    at = select_long_on() ? select_long_at() : -1;
+    dx = strata::kernels::qsa_scores_dx_launches();
+}
+
 bool Verifier::capture_all(std::string& err) {
     const OnDevice on_device(device_);
     if (g_ == nullptr) { err = "verify: capture_all before init"; return false; }
@@ -5988,6 +6026,7 @@ bool Verifier::pl_launch(int T, const int32_t* tokens, int64_t pos0, std::string
     SessionState& ss = *ss_;
     if (pos0 + T > ss.qsa_states[ss.qsa_primary()].max_cells) { err = "verify: the window runs past the context"; return false; }
     const int sl = select_long_on() && pos0 + T >= select_long_at() ? 1 : 0;   // the variant this window's context pays off with
+    ++sel_windows_[sl];   // r5 F2
     if (exec_[sl][T] == nullptr || commit_exec_ == nullptr || ev_done_ == nullptr || pl_ple_rows_.empty()) {
         err = "verify: pipelined window not prepared (capture_all)";
         return false;

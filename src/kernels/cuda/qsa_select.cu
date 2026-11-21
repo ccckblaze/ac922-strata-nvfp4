@@ -2,6 +2,7 @@
 #include "strata/core/emulate.hpp"
 #include "strata/core/sm75_series.hpp"
 #include "strata/core/geometry.hpp"
+#include "strata/core/dispatch_stats.hpp"
 #include <cstdlib>
 #include <cstring>
 #include "strata/kernels/qsa_select.hpp"
@@ -1524,6 +1525,62 @@ __global__ void __launch_bounds__(SCORE_WARPS * 32) block_scores_multi_kernel(co
     block_scores_multi_body(pooled, dead, q_idx, steps, nq, max_blocks, out, early_exit, srow);
 }
 
+// dec3 D5 STRATA_SCORES_PAIRS (default on for CUDA, =0 the multi kernel above): the decode call's (block, query) pairs
+// spread over the warps, one pair per warp pass, instead of each warp walking its block's queries one after another
+// (a dependent shuffle chain per query: ~0.85 us per window row at a short context).  Per pair the multi kernel's
+// arithmetic, expression for expression; each pair writes its own score.
+__global__ void __launch_bounds__(SCORE_WARPS * 32) block_scores_pairs_kernel(const float* __restrict__ pooled,
+                                                                              const float* __restrict__ dead,
+                                                                              const float* __restrict__ q_idx,
+                                                                              const int32_t* __restrict__ steps, int nq,
+                                                                              int64_t max_blocks, float* __restrict__ out) {
+    // no staging: every thread reads the steps, a warp its pair's key and query slices straight from L2 (one round trip)
+    int64_t top = 0;
+    for (int q = 0; q < nq; ++q) {
+        const int64_t v = steps[q * kStepCount + kStepNBid];
+        top = v > top ? v : top;
+    }
+    const int64_t nb = top + 1 < max_blocks ? top + 1 : max_blocks;   // b <= top && b < max_blocks
+    const int64_t pairs = nb * nq;
+    const int lane = threadIdx.x & 31;
+    const int64_t wstride = (int64_t) gridDim.x * SCORE_WARPS;
+    for (int64_t t = (int64_t) blockIdx.x * SCORE_WARPS + (threadIdx.x >> 5); t < pairs; t += wstride) {
+        const int64_t b = t / nq;
+        const int qi = (int) (t - b * nq);
+        const int64_t n_bid = steps[qi * kStepCount + kStepNBid];
+        if (b > n_bid) continue;
+        const float* q = q_idx + qi * IDX_HEADS * IDX_DIM + lane * 4;
+        float4 qv[IDX_HEADS];
+#pragma unroll
+        for (int h = 0; h < IDX_HEADS; ++h) qv[h] = *reinterpret_cast<const float4*>(q + h * IDX_DIM);
+        const float4 k4 = (b == n_bid) ? *reinterpret_cast<const float4*>(dead + lane * 4)
+                                       : *reinterpret_cast<const float4*>(pooled + b * IDX_DIM + lane * 4);
+        float score = 0.0f;
+#pragma unroll
+        for (int h = 0; h < IDX_HEADS; ++h) {
+            const float4 q4 = qv[h];
+            float d = k4.x * q4.x + k4.y * q4.y + k4.z * q4.z + k4.w * q4.w;
+#pragma unroll
+            for (int o = 16; o > 0; o >>= 1) d += __shfl_xor_sync(0xffffffffu, d, o);
+            score += d > 0.0f ? d : 0.0f;
+        }
+        if (lane == 0) {
+            if (b == n_bid && (int64_t) steps[qi * kStepCount + kStepNKv] % R != 0) score += 1e9f;
+            out[qi * max_blocks + b] = score;
+        }
+    }
+}
+int g_scores_pairs = -1;   // qsa_set_scores_pairs: -1 = STRATA_SCORES_PAIRS (default on for CUDA)
+bool scores_pairs_on() {
+    if (g_scores_pairs >= 0) return g_scores_pairs != 0;
+#if defined(__HIPCC__)
+    static const bool on = [] { const char* v = std::getenv("STRATA_SCORES_PAIRS"); return v != nullptr && std::atoi(v) != 0; }();
+#else
+    static const bool on = [] { const char* v = std::getenv("STRATA_SCORES_PAIRS"); return v == nullptr || std::atoi(v) != 0; }();
+#endif
+    return on;
+}
+
 // Queries of different slots, each with its own indexer keys: blockIdx.y is the query, and its CTAs run exactly the
 // single-query call of block_scores_multi_kernel (qsa_block_scores_slots).
 struct ScoreSlotKeys {
@@ -2040,7 +2097,7 @@ bool scores_early_exit() {
     return on;
 }
 
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)   // r5 F2: every CUDA build (was STRATA_EXPERIMENTAL_SM60 only)
 // STRATA_SELECT_LONG (verify.cpp): the long-context decode select, qsa_block_scores_long / qsa_block_topk_long.
 // ---- decode block scores bit for bit block_scores_multi_kernel's, without its shuffles (STRATA_SCORES_DX, default on
 // 6.x, under STRATA_SELECT_LONG).  The multi kernel gives a block to a warp and pays 5 shuffles per head per (block, query) for 4 products per
@@ -2417,7 +2474,7 @@ __global__ void __launch_bounds__(MT_T) block_topk_multi_emit_kernel(const float
       }
     }
 }
-#endif  // !__HIPCC__ && STRATA_EXPERIMENTAL_SM60
+#endif  // !__HIPCC__
 }  // namespace
 
 bool qsa_block_scores_slots(const float* const* pooled, const float* const* dead, const float* q_idx,
@@ -2556,6 +2613,8 @@ bool scores_thread_on() {
     return ok[dev] == 1;
 }
 
+void qsa_set_scores_pairs(int on) { g_scores_pairs = on; }
+
 bool scores_halve_on() {
     static const int env = [] { const char* v = std::getenv("STRATA_SCORES_HALVE"); return v ? (std::atoi(v) != 0 ? 1 : 0) : -1; }();
     if (env >= 0) return env != 0;
@@ -2602,6 +2661,12 @@ void qsa_block_scores(const float* pooled, const float* dead, const float* q_idx
             if (e != cudaSuccess) { std::fprintf(stderr, "qsa_block_scores halve: %s\n", cudaGetErrorString(e)); std::exit(1); }
             return;
         }
+        const bool pairs = scores_pairs_on() && scores_early_exit();
+        if (pairs) strata::dispatch::note("qsa scores: decode pairs kernel (STRATA_SCORES_PAIRS)");
+        if (pairs)   // dec3 D5: the (block, query) pairs over the warps, the same bits
+            block_scores_pairs_kernel<<<256, SCORE_WARPS * 32, 0, (cudaStream_t) stream>>>(pooled, dead, q_idx, steps, (int) nq,
+                                                                                         max_blocks, scores);
+        else
         block_scores_multi_kernel<<<256, SCORE_WARPS * 32, 0, (cudaStream_t) stream>>>(pooled, dead, q_idx, steps, (int) nq,
                                                                                      max_blocks, scores, scores_early_exit());
         const cudaError_t e = cudaGetLastError();
@@ -3507,9 +3572,11 @@ void qsa_block_topk(const float* scores, const int32_t* steps, int64_t nq, int64
     if (e != cudaSuccess) { std::fprintf(stderr, "qsa_block_topk: %s\n", cudaGetErrorString(e)); std::exit(1); }
 }
 
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)
 // STRATA_SCORES_DX: 0 off, 1 on for any CUDA card; unset: on for compute capability 6.x (block_scores_dx_kernel).
+// r5 F2: the sm_120 table (nv_defaults.cpp) sets it to 1 with STRATA_SELECT_LONG=1.
 // `sms`: the device's multiprocessors (the grid: as many CTAs as fit on each).
+std::atomic<long long> g_dx_launches{0};   // host calls that launched the DX kernel (qsa_scores_dx_launches)
 static bool scores_dx_device(int& sms) {
     static const int env = [] {
         const char* v = std::getenv("STRATA_SCORES_DX");
@@ -3568,11 +3635,15 @@ static bool qsa_block_scores_dx(const float* pooled, const float* dead, const fl
     block_scores_tail_kernel<<<(unsigned) nq, 32, 0, st>>>(dead, q_idx, steps, max_blocks, scores);
     const cudaError_t e = cudaGetLastError();
     if (e != cudaSuccess) { std::fprintf(stderr, "qsa_block_scores (dx): %s\n", cudaGetErrorString(e)); std::exit(1); }
+    // r5 F2: the dispatch proof (a graph capture counts once; the verifier counts the long graphs' launches)
+    strata::dispatch::note("qsa scores: decode DX kernel (STRATA_SCORES_DX)");
+    if (g_dx_launches.fetch_add(1, std::memory_order_relaxed) == 0)
+        std::fprintf(stderr, "strata qsa: decode block scores on the DX kernel (STRATA_SCORES_DX, %d SMs)\n", sms);
     return true;
 }
 #endif
 
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)
 // STRATA_TOPK_MULTI: 0 off, 1 on for any CUDA card and capacity; unset: on for compute capability 6.x past the register
 // kernel's reach (GP100: 0.39 -> 0.04 ms per call at 300K cells; see block_topk_multi_hist_kernel)
 static int topk_multi_mode() {
@@ -3618,8 +3689,16 @@ static bool qsa_block_topk_multi(const float* scores, const int32_t* steps, int6
 
 // ---- STRATA_SELECT_LONG (verify.cpp, opt-in): the decode select past ~64K cells.  Outside the SM60 build (and on HIP)
 // these are the plain calls; the scratch is never asked for.
+int64_t qsa_scores_dx_launches() {
+#if !defined(__HIPCC__)
+    return g_dx_launches.load(std::memory_order_relaxed);
+#else
+    return 0;
+#endif
+}
+
 int64_t qsa_topk_multi_scratch_ints(int64_t nq) {
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)
     return (nq < MT_MAXQ ? nq : MT_MAXQ) * (int64_t) MT_Q_INTS;
 #else
     (void) nq;
@@ -3629,7 +3708,7 @@ int64_t qsa_topk_multi_scratch_ints(int64_t nq) {
 
 void qsa_block_topk_long(const float* scores, const int32_t* steps, int64_t nq, int64_t max_blocks, int64_t cap,
                          const QsaShapes& s, int32_t* ids, void* stream, int64_t active_blocks, int32_t* multi_scratch) {
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)
     // several CTAs per query through the caller's scratch (decode calls: no active count, a few queries)
     static const bool old = std::getenv("STRATA_TOPK_OLD") != nullptr;
     if (nq > 0 && multi_scratch != nullptr && !old && active_blocks <= 0 && nq <= MT_MAXQ && s.idx_block == R &&
@@ -3647,7 +3726,7 @@ void qsa_block_topk_long(const float* scores, const int32_t* steps, int64_t nq, 
 
 void qsa_block_scores_long(const float* pooled, const float* dead, const float* q_idx, const int32_t* steps, int64_t nq,
                            int64_t max_blocks, const QsaShapes& s, float* scores, void* stream, int64_t active_blocks) {
-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
+#if !defined(__HIPCC__)
     if (nq > 0 && s.idx_dim == IDX_DIM && s.idx_n_head == IDX_HEADS && s.idx_block == R && scores_multi_on() &&
         nq <= MQ && active_blocks <= 0 &&
         qsa_block_scores_dx(pooled, dead, q_idx, steps, nq, max_blocks, scores, stream))

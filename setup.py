@@ -6067,11 +6067,11 @@ def install_build_tools(gpu, yes):
     say("  They can be installed now (about 8-10 GB, 15-40 minutes" + (", Windows will ask for permission" if WIN else
                                                                         ", sudo will ask for your password") + ").")
     if ask("  Install them now?", ["y", "n"], "y", yes) != "y":
-        fail("the build tools are needed", "install them yourself (see README.md) and run it again")
+        fail("the build tools are needed", "install them yourself (see docs/fork/INSTALL.md) and run it again")
     if WIN:
         if shutil.which("winget") is None:
             fail("winget (Windows package manager) is not available",
-                 "install 'App Installer' from the Microsoft Store, or install the tools by hand (README.md)")
+                 "install 'App Installer' from the Microsoft Store, or install the tools by hand (docs/fork/INSTALL.md)")
         wg = ["winget", "install", "-e", "--source", "winget", "--accept-package-agreements",
               "--accept-source-agreements", "--disable-interactivity"]
         if not have_cc:
@@ -6113,7 +6113,7 @@ def install_build_tools(gpu, yes):
                          "install the CUDA Toolkit 13 from https://developer.nvidia.com/cuda-downloads and run it again")
     nvcc, cuda_v = find_nvcc(below=(13, 0)) if old else find_nvcc()
     if (WIN and find_vcvars(cuda_v) is None) or (not WIN and shutil.which("g++") is None):
-        fail("the C++ build tools did not install", "install them by hand (README.md) and run it again")
+        fail("the C++ build tools did not install", "install them by hand (docs/fork/INSTALL.md) and run it again")
     if nvcc is None or cuda_v < need_cuda:
         fail("the CUDA Toolkit did not install", "install it from https://developer.nvidia.com/cuda-downloads, then run it again")
     nvcc, cuda_v = sm120_nvcc(nvcc, cuda_v, archs)
@@ -6289,6 +6289,25 @@ def engine_defs(archs, toolkit=13) -> list:
     """Extra CMake definitions for the engine: the experimental Pascal/Volta build (#295) for cards below sm_75, and
     for every CUDA 12 engine (the same build as the ready-made CUDA 12 one: it admits the older cards)."""
     return ["-DSTRATA_EXPERIMENTAL_SM60=ON"] if min(int(x) for x in archs) < 75 or int(toolkit) == 12 else []
+
+
+def engine_reads_pictures(eng) -> bool:
+    """The engine in `eng` reads pictures itself (strata --vision-gpu, the CUDA build after 0.2.15-nvfp4.4): its BUILD.json says "vision_gpu", or a
+    locally built engine carries the option."""
+    try:
+        meta = json.loads((Path(eng) / "BUILD.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    if meta.get("vision_gpu") is True:
+        return True
+    if meta.get("source") != "local":
+        return False
+    try:
+        import mmap
+        with open(Path(eng) / EXE, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            return m.find(b"--vision-gpu MMPROJ") >= 0
+    except (OSError, ValueError):
+        return False
 
 
 def prebuilt_vision(meta: dict, gpu: dict, vision: str) -> str:
@@ -6970,7 +6989,7 @@ SETUP_ENV = frozenset({"STRATA_HIPBLASLT_TUNING", "STRATA_ROCBLAS_TUNING", "STRA
 # (0.1.44 dropped them with the rest of SETUP_ENV).  This fork's NVFP4 / Q8_0 / mix packs and Qwen3.6 never get them
 # from setup either, so there too they are the user's own.
 SETUP_ENV_UNSLOTH = frozenset({"STRATA_MMQ_KQ", "STRATA_HC_Q8", "STRATA_ROUTE_TAIL_SKIP"})
-SETUP_VISION = frozenset({"exe", "cpu_exe", "mmproj", "model", "gpu", "max_tokens", "threads"})
+SETUP_VISION = frozenset({"exe", "cpu_exe", "mmproj", "model", "gpu", "max_tokens", "threads", "in_engine", "preload"})
 
 
 def carry_over(old: dict, cfg: dict, explicit: list[str] | None = None) -> list[str]:
@@ -8842,13 +8861,13 @@ NVFP4_WITHDRAWN = {
 }
 NVFP4_MIN_ARCH = 75                    # RTX 20 and newer (docs/NVFP4.md, "Other GPUs")
 NVFP4_MIN_VRAM_GB = 11.5               # a 12 GB card (nvidia-smi lists ~11.99); an 8 GB one has no room for the cache
-NVFP4_MIN_RAM_GB = 60                  # a 64 GB PC (63.7 listed), the README's floor
+NVFP4_MIN_RAM_GB = 60                  # a 64 GB PC (63.7 listed), the floor in docs/fork/INSTALL.md
 NVFP4_ALL_RAM_GB = 92                  # the engine's rule (memory.hpp kLowRamBelowGib, the same ullTotalPhys GiB as
                                        # ram_gb()): from here every expert stays in RAM - a 96 GB PC lists 93.4-95.6 -
                                        # below it the engine's own low-RAM mode (a 64 GB PC)
 NVFP4_BESIDE_GIB = 16                  # 0.1.42-nvfp4.2, the engine's kLowRamBesideGib: from 92 GiB too, experts.bin and
                                        # this much more must fit, else the low-RAM mode (qwen-q8 on 128 GB)
-NVFP4_CONTEXTS = ((28, 262144), (20, 131072), (14, 65536), (0, 32768))   # VRAM -> context, the README's table
+NVFP4_CONTEXTS = ((28, 262144), (20, 131072), (14, 65536), (0, 32768))   # VRAM -> context, the table in docs/fork/INSTALL.md
 NVFP4_VISION_TOKENS = 1024             # the tray's: the encoder runs on the CPU
 
 
@@ -9475,6 +9494,14 @@ def nvfp4_install(a, family: str, gpu: dict, multi: list, cuda_tk: int, ram: flo
                          "gpu": vision == "gpu", "max_tokens": int(vt)}
         if vision == "cpu":
             cfg["vision"]["threads"] = max(1, (os.cpu_count() or 8) // 2)
+            # the engine reads the pictures on the GPU in borrowed expert slots (strata --vision-gpu), the CPU reader above is its fallback;
+            # --vision cpu keeps the CPU reader alone
+            from strata_control import vision_reader as VR
+            if VR.in_engine_wanted(a.vision, vision, engine_reads_pictures(eng)):
+                cfg["vision"]["in_engine"] = True
+                cfg["vision"]["preload"] = True     # pinned and warmed up at the start (+1.2 s), so the first picture is as fast as the rest
+                ok("images: read on the GPU by the engine, in expert slots it borrows for each picture and refills right after "
+                   "(the CPU reader when there is no room; --vision cpu keeps the CPU reader)")
     cal = setup_calibration(cfg, False)                # tuned earlier (START-HERE --calibrate): kept by a re-run
     if cal is not None:
         sys.path.insert(0, str(ROOT / "tools"))
