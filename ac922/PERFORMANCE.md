@@ -87,6 +87,10 @@ dependent); determinism is claimed only against the 10K `det` fixture.
 - `results/charts/ac922-bump-061-2026-11-19.png` — the 0.1.59 → 0.1.61 adoption re-test: 6-card
   same-protocol pairs, 4-card two-boot state, and the byte-exact full-window pair (generator:
   `results/charts/plot-bump-061-2026-11-19.py`).
+- `results/charts/ac922-anatomy-2026-11-22.png` — the lane's own decode-window anatomy (5a): the flat
+  ~20 ms GPU body against the 0.5 → 17.5 ms host-CPU expert term, the 131 K read-threshold set by three
+  same-env anchors against the wave's arm deltas, and the hit-ratio/absolute-miss pair that shows the
+  cache is not thrashing (generator: `results/charts/plot-anatomy-2026-11-22.py`).
 
 ## 4b. Window-shape family, 6 cards (2026-11-17 overnight sweep, `note312/shapes.jsonl`)
 
