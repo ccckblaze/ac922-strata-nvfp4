@@ -694,6 +694,36 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.22 - 4-card batch-shape calibration: the analysis's sweet spot was wrong, 4/4 wins; the noise floor got an accidental 3-boot replicate (11-21 evening, 4 cards)
+
+- An upstream-style analysis claimed the 4-card aggregate sweet spot is `--batch 4
+  --batch-groups 2` (2 rows/group), that `groups=1` "loses drafts", that the 4-card
+  idle-window floor is 17-18 ms, and that full-window 4x concurrency is capacity-feasible
+  (~5.2 GiB host-tier/stream, CC/floor timing the real bottleneck).  Only the last claim
+  survived contact with the box: the shape had never been A/B'd on 4 cards (the shape fix
+  was 6-card evidence), so we measured.
+- Paired sweep (`/data/work/note312`, shapesweep boots, aggbench warm-prefix decode n=4,
+  wall_tg medians per depth): arms 4/2 (5 boots incl. an accidental 3-boot replicate),
+  4/4 (s44r, s44c), 4/1 (s41r).  4/4 beats the 4/2 band at 8K (151.0 vs 139.5), 50K
+  (126.0 vs 119.2) and 98K (99.8 vs 93.9) with **both** samples above the entire 4/2
+  band; 131K neutral (73.9 vs 70.0; one s44 sample at 58.3 traced to admission stagger
+  - ttft 1.7-9.4 s - while its sum_tg 95 sat in band); single-stream tg1 8K unharmed
+  (86.5-88.0 vs 86.5-90.5).  4/1 serial window is dead: -21 to -33% aggregate.
+- **Adopted 4/4 on the 4-card lane** (config + launcher auto-shape `(4,4) if ncard==4`;
+  6-card keeps 6/3).  Mechanism reading: pipelined groups keep MTP slot drafts at
+  groups>=2 either way, and 4 groups of 1 row removes the pipeline bubbles that cost
+  most at shallow/mid depth; the analysis's "2 rows/group for expert sharing" paid less
+  than predicted - coalesced streaming reads were not the binding constraint here.
+- Claims judged: `groups=1 丢草稿` is **mechanically wrong** (a 1xN serial window keeps
+  slot drafts per `batch_groups.hpp`; the auto-pipelined path is what skips them), but
+  4/1 is dead anyway on measured aggregate; the 17-18 ms idle floor was a borrowed
+  6-card number - our tg1 84-90 implies ~27-30 ms/window.  Capacity claim confirmed.
+- Methodology artifact worth keeping: the round-1 boots silently clamped to the
+  launcher's auto-shape (run.sh forces `(4,2)`/`(6,3)` whenever `STRATA_BATCH*` env are
+  unset, overriding config edits) - the accidental 3-boot 4/2 replicate became our
+  **noise floor**: wall_tg ±2.5% at 8K, worst -5.6% at 50K, ±1.2% at 98K, ±2.2% at 131K.
+  Anything under ~5% needs paired boots, and sweeps must pass
+  `STRATA_BATCH=4 STRATA_BATCH_GROUPS=G` via EXTRA, never edit the config alone.
 ### H.21 - QUALGATE-FAIL traced to a .2-era REF: .4 moved the long-relay numerics, cold det untouched; re-baselined and green (11-21 afternoon, 6 cards)
 
 - 15:31 `qualgate check` on the shipped-dense boot failed `relay-agreement-collapse 0/8` while

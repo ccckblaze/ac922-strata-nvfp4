@@ -586,3 +586,33 @@ cells agree only 2/8-8/8 gate-to-gate, so `rate>0` is a collapse detector, not a
 **Standing guard adopted with this verdict:** keep `mtp/rt-tuned` out of `<model data>/mtp/`
 unless an experiment explicitly puts it back, and re-verify `--mtp` in the live engine's
 cmdline after ANY bump or data-dir sync - the auto-detect will re-arm silently.
+
+## Adopted: the 4-card ship shape is `--batch 4 --batch-groups 4` (2026-11-21)
+
+A borrowed analysis said the 4-card sweet spot was 2 rows/group (4/2) because 12
+layers/card make multi-row QSA scoring expensive.  Never measured here, so we paired
+sweep boots: arms 4/2 (5 boots), 4/4 (2 boots), 4/1 (1 boot); aggbench warm-prefix
+decode, n=4, wall_tg medians:
+
+| depth | 4/2 band med | 4/4 med | 4/1 (serial) |
+| --- | ---: | ---: | ---: |
+| 8K   | 139.5 | **151.0** | 98.3 |
+| 50K  | 119.2 | **126.0** | 81.1 |
+| 98K  | 93.9  | **99.8**  | 71.1 |
+| 131K | 70.0  | 73.9 (neutral) | 53.8 |
+| tg1 8K (single-stream) | 86.5-90.5 | 86.5-88.0 | 88.9 |
+
+- 4/4 wins 8K/50K/98K with **both** samples above the entire 4/2 band (+4-8%); 131K
+  neutral (one 58.3 wall sample was admission stagger, ttft 1.7-9.4 s; its sum_tg 95
+  in band); single-stream unharmed.  **Adopted**: config `--batch-groups 4`, launcher
+  auto-shape `(4,4) if ncard==4` (6-card stays 6/3).
+- 4/1 re-confirmed dead (-21 to -33%).  The analysis's reason was wrong though:
+  `--batch-groups 1` keeps a serial window WITH slot drafts (`batch_groups.hpp`);
+  drafts die on the auto-pipelined path only when groups>=2 without `STRATA_PIPED_MTP`.
+  The 4-card idle-window floor is ~27-30 ms (tg1 84-90), not the borrowed 17-18 ms.
+- Noise floor (accidental 3-boot 4/2 replicate, after the auto-shape clamping incident
+  where run.sh silently forced (4,2) unless `STRATA_BATCH_GROUPS` env is passed): wall_tg
+  ±2.5% at 8K, worst -5.6% at 50K, ±1.2% at 98K, ±2.2% at 131K.  Rule: effects under
+  ~5% require paired boots; sweeps pass the shape via EXTRA env, never config alone.
+- Gate on the adopted boot: cold det bit-identical to REF (7/8 relay cells, acc ok -
+  H.21 discipline), QUALGATE-PASS recorded in runbook.
