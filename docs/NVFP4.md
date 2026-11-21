@@ -378,6 +378,173 @@ Tried and dropped:
 - The adaptive tier's swaps spread over every round (24 a round instead of 96 every 4): 1.2% fewer rounds/s.
   Without the tier decode drops 23%. High process priority: no change.
 
+### RTX 50: faster prompts (2026-11-20, release 0.2.15-nvfp4.4)
+
+A second round on the prompt path, after a probe of what the 5090 computes fastest for each data type
+(block-scaled FP8 accumulates in f32 at full rate, plain f16 does so at half rate, int8 scores QSA blocks fastest).
+Every switch below is on by default on RTX 50 cards only; `STRATA_NVFP4_SM120=0` still turns the whole set off and each
+switch's own `=0` turns that one off.
+
+**Prompt**, serve, one request, context 140,000, RTX 5090 at 600 W, ms. The first three columns were measured in one hour
+(2 rounds, alternating order), the CUDA graphs on top of this round in a second set the same evening, where this round
+without graphs read 64K in 5,265 ms (5,261 in the first set):
+
+| prompt tokens | main before this round | this round | + CUDA graphs | Basalt |
+| ---: | ---: | ---: | ---: | ---: |
+| 3,072 | 922 | 880 | 857 | 1,258 |
+| 16,676 | 1,686 | 1,398 | 1,350 | 1,972 |
+| 66,617 | 6,208 | 5,261 | 5,110 | 6,300 |
+| 131,000 | 12,496 | 10,549 | 10,345 | - (context ends at 66K) |
+
+The read no longer includes refilling the expert slots the prompt borrowed (that runs beside decode now), so the time
+to the first token is the honest end-to-end number: 64K 6,191 -> 5,248 ms, 128K 12,348 -> 10,497 ms (without the
+graphs); a 64K prompt plus a 300-token answer 7,795 -> 6,772 ms. Decode is unchanged (no switch here runs in it).
+
+**Accuracy**, teacher-forced corpus, three runs: top token 96.08 / 96.10 / 95.85%, KL 0.0149-0.0156, the same as main
+before this round (96.1% / 0.015; two runs of one engine differ by 96.52% / 0.0118). Long prompts of 8-32K against an
+fp16 reference: KL 0.0081 and 0.0074, as before. With every switch below at `=0` the engine reproduces main's text and
+first-token logits bit for bit.
+
+| switch | what it does | output |
+| --- | --- | --- |
+| `STRATA_QSA_I8=1` | QSA block scores on int8 tensor cores (six int8 products per score) | rounds; the same blocks selected in tests |
+| `STRATA_DENSE_F16C=1` | the prompt's dense FP16 GEMMs with f16 accumulation in chains of 64, then f32 | rounds |
+| `STRATA_PF_HC_INJ=1` | the hyper-connection inject folded into the HC write kernels | rounds |
+| `STRATA_PF_DM16H=1` | the HC `Dm` rows in FP16 (the largest value seen is 23) | rounds |
+| `STRATA_PF_GRAPH=7` | the QSA indexer loop of a layer and each expert group's kernels as CUDA graphs (updated in place, not rebuilt) | exact |
+| `STRATA_PF_SHARED_LATE=1` | a streamed chunk's shared expert runs on the GPU while the host groups the routed ones | exact |
+| `STRATA_KV_PREFETCH=1`, `STRATA_PF_KV_UNSTAGE_SIDE=1` | KV streaming's copies on their own stream, ordered by events | exact |
+| `STRATA_PF_UPMIX_SKIP32=1` | the attention half skips an FP32 write nobody reads | exact |
+| `STRATA_PF_REFILL_BG=1` | serve refills the borrowed expert slots beside decode, hottest first, in batched copies | exact text in the fixed-placement mode; moves the first windows' expert placement in serve |
+
+Also new and on by default: a GEMM warm file (`STRATA_GEMM_WARM_FILE`, default
+`%LOCALAPPDATA%\strata\gemm-warm-<GPU>.txt`, `=0` turns it off). cuBLASLt loads each GEMM kernel the first time it
+runs; the file records the prompt's GEMM shapes and the next start replays them before the first request.
+
+### RTX 50: decode and prompt kernels after Basalt (2026-11-20, release 0.2.15-nvfp4.4)
+
+[Basalt](https://github.com/jesdga95/basalt) (MIT, copyright Jesús Gulfo) is a Strata fork tuned for this model on
+RTX 50 cards; on the same pack its decode ran 16-55% ahead of this fork's 0.2.15-nvfp4.3. This round ports its decode kernels and its
+MTP drafting, adds kernels of our own for decode and the prompt, and turns them on by default on RTX 50 cards
+(compute capability 12.0) only: other cards run as before. `STRATA_NVFP4_SM120=0` turns the whole set off, each
+switch's own `=0` turns that one off, and a switch you set yourself is kept; the start prints the count.
+
+**Decode**, serve, greedy, RTX 5090 (power limit 510 W), Ryzen 9 9950X3D, 128 GB, the tray's arguments, tokens/s, one
+run of each in the same hour: a JSON answer (long draft windows), a chat, English prose and a Ukrainian answer.
+
+| | 0.2.15-nvfp4.3 (Auto: DFlash2) | this round (Auto) | Basalt |
+| --- | ---: | ---: | ---: |
+| JSON | 329.7 | 486.7 | 474.5 |
+| chat | 218.5 | 269.2 | 248.3 |
+| prose | 205.1 | 261.4 | 276.2 |
+| Ukrainian | 154.3 | 241.3 | 234.9 |
+
+- Auto now drafts with the MTP layer and Basalt's drafting on CUDA with one request at a time: its two-stage draft
+  head (`--mtp-head proxy`), its cumulative window rule with a threshold set from how many MB per expert the CPU
+  serves (`--mtp-cum auto`, 0.399:0.285 on this PC) and a window of 8. `STRATA_AUTO_NEW_MTP=0` keeps the old Auto.
+- **These runs used Basalt's self-distilled draft layer.** 0.2.15-nvfp4.4 ships it for the GPTQ set (Qwen Community
+  License 1.0, Basalt's model card): `mtp/rt-tuned/dense.bin` in this fork's GPTQ repository, pinned and checked by
+  `strata_control/drafting_fetch.py` (`ensure_fork_tuned_mtp`); setup, update and `prepare-model.cmd` put it beside the
+  set's own layer (`<model>/mtp/rt-tuned`, the experts and draft vocabulary linked from `mtp/`). Without it Auto uses
+  the set's own MTP layer, which accepts fewer drafts. The NVIDIA, mix and Q8_0 sets keep their own layer (not
+  measured with it).
+- The last three switches in the table below came after these runs: prose 259 -> 271 tokens/s in two rounds (Basalt
+  276 in the same hour), Ukrainian and chat windows 1-2% shorter, JSON the same.
+
+**Prompt**, one request, context 140,000, ms:
+
+| prompt tokens | 0.2.15-nvfp4.3 | this round |
+| ---: | ---: | ---: |
+| 3,072 | 924 | 853 |
+| 16,676 | 1,938 | 1,657 |
+| 66,617 | 7,845 | 6,163 |
+| 131,000 | 14,460 | 12,471 |
+
+Basalt read 16K in 1,864 ms and 64K in about 6,150 ms; its context ends at 66K.
+
+**Accuracy**, teacher-forced on this fork's corpus (the same text through both engines, every position): the top
+token matches the base engine's 96.11% of the time with a KL of 0.0150, while two runs of the base engine itself
+differ by 96.52% / 0.0118 (the CPU/GPU split of the experts changes from run to run); the NLL is not worse. Four
+switches change rounding (marked below); every other one leaves the generated text bit-identical, checked by md5 in a
+mode with fixed expert placement.
+
+| switch | what it does | from | output |
+| --- | --- | --- | --- |
+| `STRATA_HC_Q8=1` | the 8-bit hyper-connection read (int8 rows, fp16 scales) | Basalt | rounds (KL 0.0152) |
+| `STRATA_DENSE_TC=1` | an int8 tensor-core GEMV for every Q8_0 dense matrix of a 1-8 token window | Basalt | rounds, the same at every window width |
+| `STRATA_ATTN_STAGED=1` | INT8 attention chunks staged by `cp.async`, two blocks per SM | Basalt | exact |
+| `STRATA_GDN_MID=1` | a DeltaNet layer's middle (q/k/v and z projections, gates, recurrence, norm, output projection) in one persistent kernel | Basalt's structure, our arithmetic | exact |
+| `STRATA_QPROJ_HALF=1`, `QPROJ_GATE_AT=3`, `QPROJ_GATE_GRID=48`, `GRAPH_PRIO=1` | the attention layer's query rows first, the gate rows later on 48 blocks, stream priorities kept in the graphs | Basalt's placement, our grid cap | exact |
+| `STRATA_DF_PDL=1` | programmatic dependent launch in the doorbell graphs too | ours | exact |
+| `STRATA_ADAPT_FETCH=1`, `ADAPT_ACROSS=1`, `ADAPT_CAND_MIN=1.5`, `ADAPT_DECAY=0.96`, `PCIE_FIXED=0.45` | the serve tier admits the PCIe share's experts, ranks misses across all layers, PCIe share fixed at 0.45 | ours | moves experts between GPU and CPU (KL 0.0156) |
+| `STRATA_PREFILL_EQUAL=2` | equal prompt chunks | ours | rounds (chunk order) |
+| `STRATA_GDN_TC=1`, `GDN_CONVL2=2`, `GDN_TC_NP=1` | the prompt's DeltaNet scan on tensor cores | ours | rounds (first-token KL ~0.001) |
+| `STRATA_PF_GROUP_SCRATCH=1`, `PF_HC_REGION=2` | smaller prompt buffers, fewer expert slots borrowed | ours | exact |
+| `STRATA_EARLY_READ=1` | the next layer's first hyper-connection read starts before the combine and waits on its counter | ours | exact |
+| `STRATA_GDN_MID_HEAD=2` | the DeltaNet kernel only prefetches into L2 before its wait, so its weight burst does not stall that read | ours | exact |
+| `STRATA_ROUTE_DB=2` | the router and the doorbell in one kernel | ours | exact |
+
+Also on by default, outside the table: the two-stage head (`STRATA_HEAD_PLANES=0` turns it off), the fused attention
+post (`STRATA_KV_POST=0`), the prompt's grouped FP4 expert GEMM (`STRATA_PF_FP4G=0`), the dense weights in one
+allocation (`STRATA_DENSE_SLAB=0`) and the drafter's kernels; all exact.
+
+### KV streaming on by default (2026-11-19, release 0.2.15-nvfp4.3)
+
+The elastic K/V (`--kv-grow`, on by default here) takes its VRAM from the expert cache as a dialog grows: 1,239 slots
+at 280K, and decode falls from about 205 tokens/s at the start to 180. KV streaming (`--kv-resident N`, upstream's)
+keeps N cells of each of the 12 attention layers in VRAM, the whole K/V in pinned RAM, and reads the blocks a token's
+selection names from RAM when they are not resident. It looked slower than the elastic K/V (upstream #4815 reports
+-13 to -20%), and it was, for a reason outside streaming: `--kv-resident` turns the elastic K/V off, and the expert
+cache was one VMM range only together with it (`ExpertCache::set_vmm(on)`). The plain arena the cache fell back to made
+every GPU stage of a verify window slower under WDDM, and unevenly from run to run. GPU stage times
+(`STRATA_VERIFY_PROFILE=1`), 2K prompt, ms a window:
+
+| | Projections (GEMV) | Experts in VRAM | Head | Decode, tokens/s |
+| --- | ---: | ---: | ---: | ---: |
+| Elastic K/V (VMM cache) | 1.04-1.05 | 1.56-1.58 | 0.46 | 190.6-193.2 |
+| `--no-kv-grow`, no streaming | 1.69 | 2.12 | 0.88 | (fewer slots) |
+| `--kv-resident 32768`, plain arena | 1.21-2.90 | 1.80-3.65 | 0.57-1.76 | 102-177 |
+| `--kv-resident 32768`, VMM cache | 1.03-1.08 | 1.56-1.61 | 0.45-0.47 | 183.5-190.2 |
+
+Decode with the VMM cache, RTX 5090, the GPTQ tray profile, DFlash2, the same 1,730-token answer after every prompt
+(`--spec-follow`: greedy output differs from run to run, so free runs compare different texts), arms interleaved:
+
+| Prompt | Elastic K/V | KV streaming | |
+| --- | ---: | ---: | ---: |
+| 2K | 190.6-193.2 | 183.5-190.2 | -1 to -4% |
+| 32K | 203.9 | 201.7 | -1% |
+| 128K | 192.8 | 196.0 | +2% |
+| 274K | 178.6-179.6 | 192.5-195.0 | +8% |
+
+The release's engine, the same way: 2K 203.4 and 205.9 with `--no-kv-stream` against 202.8 and 200.8, 274K 176.8
+against 188.7. A 128K prompt reads at 8,930 tokens/s against 9,030-9,130 (-2%).
+
+What streaming itself costs, from SM clock counters inside the resolve and copy kernels (they run inside the window
+graphs, which nsys does not trace on WDDM), per attention layer and window: the block lookups about 7.5 us, the clock
+sweep about 2 us, and at 280K the copy of about 72 missed blocks (300 KB) about 19 us: 0.33 ms a round of 12 layers.
+The copy is bound by the SMs' reads of pinned memory (about 16 GB/s), not by the experts' traffic on the same link:
+19.1 us a block with the PCIe share and the tier's swaps off (`--pcie-frac 0 --adapt-every 0`), 19.4 with them.
+Tried and dropped:
+- A copy with every load of a block issued before its stores, and lookups with their loads in flight together: both
+  parity tests pass, no gain.
+- Fetching blocks a round ahead, when the link is free: the 64 blocks below the top-k threshold of a call name 4% of the
+  next call's misses, the next 512 name 26% at 274 fetched blocks a call (4 times the misses' traffic), the blocks
+  beside the selected ones 15%. New blocks enter a selection at once, not from just below the threshold.
+
+The dialog cache in RAM works with it (the tray's profile through the server, three dialogs of about 100K tokens taken
+in turn): a switch back to a dialog took 258-286 ms (260-280 with the elastic K/V), its restore 77-90 ms, and every
+answer named code from its own dialog's file.
+
+What the release changes:
+- **KV streaming by default** where it pays: one GPU, `--max-context` of 131,072 or more, no `--batch`, a profiled
+  cache that can be one VMM range (every expert in RAM), and RAM for the experts plus 32 GiB plus the host copy (so a
+  96 GB PC keeps the elastic K/V). 32,768 cells a layer stay in VRAM. `--no-kv-stream` or `--kv-resident 0` keeps the
+  whole K/V in VRAM, an explicit `--kv-resident N` is used as given, `STRATA_KV_STREAM=0` turns the default off.
+  Not on AMD builds, an integrated GPU or WSL. Setup's own "KV streaming off" answers (`--kv-streaming off`, WSL, too
+  little RAM) write `STRATA_KV_STREAM=0` into the config's env, so they stay off with this engine.
+- **The expert cache is one VMM range with KV streaming too**, wherever the elastic K/V could have had it
+  (`STRATA_CACHE_VMM=0`: the old plain arena, for A/B).
+
 ### DFlash2 drafts for the NVFP4 GPTQ (2026-11-18, release 0.2.15-nvfp4.2)
 
 Upstream kept DFlash2 (incoai's block drafter for Qwen3.8-Flash-Next) off for every NVFP4 model, because it had no

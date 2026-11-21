@@ -158,6 +158,30 @@ files by hand.
 
 ## What's new
 
+- **Long prompts 17-20% faster again on RTX 50 (0.2.15-nvfp4.4).** int8 QSA scores, f16-accumulate dense GEMMs,
+  CUDA graphs for the prompt's kernel chains, less hyper-connection traffic and the borrowed expert slots refilled
+  beside decode. RTX 5090: 16K reads in 1.35 s instead of 1.69 s, 64K in 5.1 s instead of 6.2 s, 128K in 10.3 s
+  instead of 12.5 s (Basalt in the same hour: 2.0 s at 16K, 6.3 s at 64K). Accuracy and decode unchanged
+  ([measurements](docs/NVFP4.md#rtx-50-faster-prompts-2026-11-20-release-0215-nvfp44)).
+
+- **Faster decode and prompts on RTX 50 (0.2.15-nvfp4.4).** Basalt's decode kernels and drafting
+  ([Credits](#credits)) plus kernels of our own, on by default on RTX 50 cards only. RTX 5090, tokens/s against
+  0.2.15-nvfp4.3: a JSON answer 487 vs 330 (+48%), a chat 269 vs 219 (+23%), English prose 261 vs 205 (+27%),
+  Ukrainian 241 vs 154 (+56%); Basalt in the same hour 475 / 248 / 276 / 235. These decode runs used Basalt's
+  self-distilled draft layer, which now ships for the GPTQ set: setup, `UPDATE.bat` and `prepare-model.cmd` fetch it
+  (0.12 GB, checked) into the model's `mtp\rt-tuned`; without it the drafts are accepted less often. A 64K prompt
+  reads in 6.2 s instead of 7.8 s, 128K in 12.5 s instead of 14.5 s. Accuracy: KL 0.015 against the base engine,
+  whose own runs differ by 0.012. `STRATA_NVFP4_SM120=0` turns all of it off
+  ([measurements](docs/NVFP4.md#rtx-50-decode-and-prompt-kernels-after-basalt-2026-11-20-release-0215-nvfp44)).
+
+- **KV streaming on by default (0.2.15-nvfp4.3).** On one GPU with a context of 131,072 tokens or more (the tray's
+  512K), the engine keeps 32,768 cells of each attention layer's K/V in VRAM and all of it in pinned RAM (6.2 GiB at
+  512K), so the VRAM the elastic K/V took from the experts as a dialog grew stays with them. RTX 5090, the same answer
+  after each prompt: 274K 195 tokens/s against 180 (+8%), 128K 196 against 193, 32K 202 against 204, 2K 190 against
+  193; a long prompt reads about 2% slower. The expert cache now stays one VMM range with streaming: the plain arena it
+  fell back to made every GPU stage 20-60% slower under WDDM, which is why `--kv-resident` looked slower before
+  (upstream #4815). `--no-kv-stream` turns it off
+  ([measurements](docs/NVFP4.md#kv-streaming-on-by-default-2026-11-19-release-0215-nvfp43)).
 - **DFlash2 drafts for the NVFP4 GPTQ (0.2.15-nvfp4.2).** On a card that holds as many experts as an RTX 5090, Auto
   drafts with DFlash2 instead of the MTP layer: 215 tokens/s against 200 on the 5090 (+7.5%), 213 against 194 with the
   censorship switch on (+10%). Setup and `prepare-model.cmd` fetch the drafter (1.2 GB once). Smaller cards, NVIDIA's
@@ -779,10 +803,20 @@ hand.
 **Releasing** (maintainers): `release/make_windows_bundle.py`, then `release/publish.py`; their headers say what each
 checks.
 
+## Credits
+
+- [Basalt](https://github.com/jesdga95/basalt) by Jesús Gulfo (MIT), a Strata fork for RTX 50 cards: this fork's RTX 50
+  decode kernels (the int8 tensor-core dense GEMV, the 8-bit hyper-connection read, staged INT8 attention, the
+  persistent DeltaNet layer, the attention layer's placement) and its MTP drafting are ported from it. Its
+  self-distilled MTP draft layer (Qwen Community License 1.0, like the model) ships for the GPTQ set as
+  `mtp/rt-tuned` in [our model repository](https://huggingface.co/Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata).
+- [Geode](https://play.google.com/store/apps/details?id=xyz.tifu.geode) ([source](https://github.com/sergqwer/geode)),
+  this fork's author's engine that runs big models on Android phones; several of this fork's ideas came from it.
+
 ## License
 
 MIT, as upstream ([LICENSE](LICENSE), copyright Niko1221 and the Strata contributors). llama.cpp / ggml code compiled
-into the build is MIT as well.
+into the build is MIT as well. Code ported from Basalt is MIT, copyright Jesús Gulfo ([LICENSE.basalt](LICENSE.basalt)).
 
 ## Star History
 

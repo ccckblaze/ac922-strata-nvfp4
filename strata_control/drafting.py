@@ -27,6 +27,7 @@ import json
 import mmap
 import os
 import re
+import shutil
 import struct
 import sys
 import time
@@ -412,6 +413,149 @@ def fork_gptq_mtp(backend: str | None, model_name: str | None, archs: Any = None
     return slots is None or slots < FORK_GPTQ_MIN_SLOTS
 
 
+#: strata-nvfp4 (owner 2026-11-19): Auto is the MTP with Basalt's drafting for every Qwen3.8-Flash-Next set where a drafter runs today (MTP or
+#: DFlash2), whatever the quantization: drafting never changes the output (every token is verified), and the tuned draft layer accepted the same
+#: on three quantizations in Basalt (NVIDIA NVFP4 + Q6_K / + Q8_0, our GPTQ; Basalt-only, only the GPTQ pack is in Strata's format here).
+#: Measured on the RTX 5090 (dec/int NOTES-int.md, serve, greedy, against DFlash2 the same hour: struct +11.8%, prose +5.7%, Ukrainian +33.5%,
+#: conv +3.4%).  The flags: the two-stage draft head (--mtp-head proxy; the engine runs the plain draft head where its head is not the Q8_0
+#: 2560-column one on the drafter's card), Basalt's cumulative window rule with Basalt's per-card threshold (--mtp-cum auto: 0.35:0.25 scaled by
+#: the CPU-served MB per expert, which the engine knows once the expert cache is sized) and Basalt's window of 8, with the self-distilled draft
+#: layer (FORK_MTP_TUNED) where one is on this computer, else the set's own layer.  On CUDA, one request at a time, one card's layers (not a split),
+#: with an engine that takes the flags (FORK_MTP_MARK); STRATA_AUTO_NEW_MTP=0 keeps the old Auto.  The person's own --spec stays.
+FORK_MTP_FLAGS = ("--mtp-head", "proxy", "--mtp-cum", "auto")
+FORK_MTP_SPEC = 8
+FORK_MTP_TUNED = "rt-tuned"                                   # <model data>/mtp/rt-tuned, then STRATA_MTP_TUNED_DIR
+#: 0.2.15-nvfp4.4: the self-distilled draft layer of Basalt (github.com/jesdga95/basalt, Jesus Gulfo; jesdga/Qwen3.8-Flash-Next-Basalt),
+#: Qwen Community License 1.0 like the model, on this fork's GPTQ repository under mtp/rt-tuned/.  Only dense.bin differs from the set's
+#: own layer (the same tensors and layout, values retrained); experts.bin and draft_vocab.bin are the set's (linked, else copied).
+#: Setup, update and prepare-model.cmd fetch it for FORK_GPTQ_SETS only (measured there): drafting_fetch.ensure_fork_tuned_mtp.
+FORK_MTP_TUNED_REPO = "Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata"
+FORK_MTP_TUNED_REVISION = "346744eb39b93e3d45b79dfb476a59043504adc6"
+FORK_MTP_TUNED_BASE_URL = f"https://huggingface.co/{FORK_MTP_TUNED_REPO}/resolve/{FORK_MTP_TUNED_REVISION}/mtp/{FORK_MTP_TUNED}/"
+FORK_MTP_TUNED_FILES = (("dense.bin", 116099072, "dfe18647e0c95d05302907be88f021590119645a1567fcd770c8d309df852d75"),
+                        ("dense.txt", 1880, "8773c81ebb0986e37fe94a8a9933e87be48b1fabc6889a0106bcdab179d1c2ac"))
+FORK_MTP_TUNED_SHARED = ("experts.bin", "draft_vocab.bin")    # the set's own files, beside the tuned dense.bin
+FORK_MTP_TUNED_GB = 0.12
+FORK_MTP_MARK = b"--mtp-cum auto"
+_mtp_marks: dict[tuple[str, int, int], bool] = {}
+
+
+def engine_has_fork_mtp(exe: str | os.PathLike[str] | None) -> bool | None:
+    """Does the engine program take --mtp-head proxy and --mtp-cum auto? None when it cannot be told (no path, unreadable)."""
+    if not exe:
+        return None
+    try:
+        path = Path(exe)
+        stat = path.stat()
+        key = (str(path), stat.st_size, stat.st_mtime_ns)
+        if key not in _mtp_marks:
+            with open(path, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                _mtp_marks[key] = data.find(FORK_MTP_MARK) >= 0
+        return _mtp_marks[key]
+    except (OSError, ValueError):
+        return None
+
+
+def fork_new_mtp(backend: str | None, engine: str | os.PathLike[str] | None = None, *, split: bool = False, slots: int = 0) -> bool:
+    """strata-nvfp4: does Auto run the MTP with Basalt's drafting (FORK_MTP_FLAGS) for a supported set on this start? CUDA, one request at a time,
+    not a layer split, an engine with the flags, and STRATA_AUTO_NEW_MTP not 0."""
+    if os.environ.get("STRATA_AUTO_NEW_MTP", "").strip() == "0":
+        return False
+    if str(backend or "").strip().lower() != "cuda" or split or slots > 1:
+        return False
+    return engine_has_fork_mtp(engine) is not False
+
+
+def fork_tuned_mtp_dir(args: list[Any], data_dir: str | Path | None) -> Path | None:
+    """The self-distilled draft layer, if one is on this computer: beside the set's layer (<mtp>/rt-tuned, or the rt folder's sibling), <model
+    data>/mtp/rt-tuned, STRATA_MTP_TUNED_DIR.  A folder counts once it has every file the engine reads (fork_tuned_mtp_complete)."""
+    cands: list[Path] = []
+    folder = _flag_value(args, "--mtp")
+    if folder and not folder.isdigit():
+        cands.append(fork_tuned_dir_for(folder))
+    if data_dir:
+        cands.append(Path(data_dir) / "mtp" / FORK_MTP_TUNED)
+    env = os.environ.get("STRATA_MTP_TUNED_DIR")
+    if env:
+        cands.append(Path(env))
+    for c in cands:
+        if fork_tuned_mtp_complete(c):
+            return c
+    return None
+
+
+def fork_tuned_dir_for(mtp_dir: str | Path) -> Path:
+    """Where a set's tuned layer goes and is looked for first: <mtp>/rt-tuned, or the sibling of an ``rt`` folder (<data>/mtp/rt-tuned)."""
+    mtp = Path(mtp_dir)
+    return mtp.parent / FORK_MTP_TUNED if mtp.name == "rt" else mtp / FORK_MTP_TUNED
+
+
+def fork_tuned_mtp_complete(folder: str | Path) -> bool:
+    """Has this folder every file of a draft layer (dense.bin, dense.txt, experts.bin, draft_vocab.bin)?  A download still in progress
+    (dense.bin.part) does not count."""
+    try:
+        return all((Path(folder) / n).is_file() for n in ("dense.bin", "dense.txt", *FORK_MTP_TUNED_SHARED))
+    except OSError:
+        return False
+
+
+def fork_tuned_wanted(model_name: str | None) -> bool:
+    """Is the self-distilled draft layer fetched for this set (setup, update, prepare-model.cmd)?  This fork's GPTQ set (FORK_GPTQ_SETS, with
+    and without the uncensoring projection), where it was measured; the NVIDIA, mix and Q8_0 sets keep their own layer."""
+    return set_of(model_name) in FORK_GPTQ_SETS
+
+
+def sync_fork_tuned_mtp(mtp_dir: str | Path) -> bool:
+    """Give the set's tuned folder (fork_tuned_dir_for) the set's own experts.bin and draft_vocab.bin (a hard link, a copy on a drive
+    without links), and again when the set's file changed (another draft vocabulary chosen).  Nothing is downloaded.  -> the folder is
+    complete.  No tuned folder: nothing is made."""
+    mtp = Path(mtp_dir)
+    out = fork_tuned_dir_for(mtp)
+    if not out.is_dir():
+        return False
+    for name in FORK_MTP_TUNED_SHARED:
+        src, dst = mtp / name, out / name
+        if not src.is_file():
+            continue
+        try:
+            if dst.is_file() and (os.path.samefile(src, dst) or
+                                  (dst.stat().st_size == src.stat().st_size and _sha256(dst) == _sha256(src))):
+                continue
+            tmp = dst.with_name(dst.name + ".tmp")
+            tmp.unlink(missing_ok=True)
+            try:
+                os.link(src, tmp)
+            except OSError:
+                shutil.copyfile(src, tmp)
+            os.replace(tmp, dst)
+        except OSError:
+            continue
+    return fork_tuned_mtp_complete(out)
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 24), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def fork_mtp_args(args: list[str], user_args: list[Any], data_dir: str | Path | None) -> list[str]:
+    """The MTP arguments with Basalt's drafting (FORK_MTP_FLAGS, --spec FORK_MTP_SPEC unless the person set --spec, the tuned layer where it is
+    here). --spec-min-p goes: the cumulative rule decides the window."""
+    out = list(args)
+    tuned = fork_tuned_mtp_dir(out, data_dir)
+    if tuned is not None and "--mtp" in out:
+        out[out.index("--mtp") + 1] = str(tuned)
+    for flag in ("--mtp-head", "--mtp-cum", "--spec-min-p"):
+        out = _without_flag(out, flag)
+    out += list(FORK_MTP_FLAGS)
+    if _flag_value(user_args, "--spec") is None:
+        out = _without_flag(out, "--spec") + ["--spec", str(FORK_MTP_SPEC)]
+    return out
+
+
 def first_arch(archs: Any) -> str:
     first = [archs] if isinstance(archs, str) else list(archs or [])
     return str(first[0]).strip().lower() if first else ""
@@ -506,6 +650,9 @@ PACK_TARGET = {"hidden": 2560, "vocab": 248320, "taps": (5, 15, 25, 35, 45)}
 FILE_FITS_AS = "qwen3.8-flash-next"
 #: Names the DFlash2 exclusions above stand for (Coder, NVFP4, Swift): a file under such a name stays out whatever its header says.
 _EXCLUDED_NAME = re.compile(r"coder|nvfp4|swift", re.IGNORECASE)
+#: strata-nvfp4: the Flash-Next sets DFlash2 was not made for that draft with their own MTP layer (the NVFP4 quantizations; not Coder or Swift,
+#: other models): Auto gives them Basalt's drafting too (FORK_MTP_FLAGS)
+_FLASH_NEXT_OTHER = re.compile(r"^qwen3\.8-flash-next-(?!.*(coder|swift))", re.IGNORECASE)
 _GGUF_HEAD = 1 << 20                                        # bytes of a GGUF read for its header (the keys are in the first few KB; the vocabulary's words are never read)
 _PACK_HEAD = 1 << 16
 _GGUF_SCALAR = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
@@ -1590,6 +1737,9 @@ def apply(cfg: dict[str, Any], *, klass: str = "other", data_dir: str | Path | N
         if fit == "family":                                       # a Qwen3.8-Flash-Next-family file the drafter was not made for (other sizes): the MTP, and the person is told
             cfg["args"] = strip_draft_flags(args)
             return Decision(asked, "mtp", NOT_SUPPORTED)
+        if asked == "auto" and _FLASH_NEXT_OTHER.match(str(name or "")) and mtp_ready(args) is True and \
+                fork_new_mtp(backend, engine, split=split, slots=slots):
+            cfg["args"] = fork_mtp_args(strip_draft_flags(args), cfg.get("user_args") or [], data_dir)   # strata-nvfp4: Basalt's drafting (FORK_MTP_FLAGS)
         return Decision(asked, "mtp")
     mtp_here = mtp_ready(args)
     vocab = vocab_path(args, data_dir)
@@ -1612,6 +1762,11 @@ def apply(cfg: dict[str, Any], *, klass: str = "other", data_dir: str | Path | N
         pack = pack_path(data_dir, engine, model_name=name, backend=backend, tuned=qualifies)
         if Path(pack) != tuned_path(data_dir, tuned_variant(backend, name)) and not pack_ready(data_dir):         # (only the tuned pack is here and this engine cannot read it: no drafter file for it)
             decision = Decision(decision.asked, "mtp", NOT_DOWNLOADED) if mtp_here is not False else Decision(decision.asked, "off", NONE_HERE)
+    # strata-nvfp4: Auto with a drafter on CUDA is the MTP with Basalt's drafting (FORK_MTP_FLAGS) wherever the MTP layer is here
+    new_mtp = normalize(mode) == "auto" and decision.drafter in ("dflash2", "mtp") and mtp_here is True and \
+        fork_new_mtp(backend, engine, split=split, slots=slots)
+    if new_mtp and decision.drafter != "mtp":
+        decision = Decision(decision.asked, "mtp")
     if decision.drafter == "off":
         cfg["args"] = strip_mtp_flags(strip_draft_flags(args))
         cfg["mtp"] = False
@@ -1619,6 +1774,8 @@ def apply(cfg: dict[str, Any], *, klass: str = "other", data_dir: str | Path | N
         cfg["args"] = strip_draft_flags(args)
         if cfg.get("drafting") is not None and normalize(cfg.get("drafting")) != "off" and cfg.get("mtp") is False:
             cfg["mtp"] = True                                 # an explicit drafter choice overrides an older "mtp": false
+        if new_mtp:
+            cfg["args"] = fork_mtp_args(cfg["args"], mine, data_dir)      # strata-nvfp4: Basalt's drafting on the MTP (FORK_MTP_FLAGS)
     else:
         base = strip_mtp_flags(strip_draft_flags(args))
         vocab, vocab_line = auto_vocab(cfg, args, vocab, form, data_dir)         # the person's own choice, else the computer's language, else the default
