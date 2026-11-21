@@ -167,6 +167,7 @@ if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_C
 # not the RAM budget (measured 2026-11-16: 98.5% of cache evictions land at parked==slots, with the
 # footprint at 17-42% of --conversation-cache-mib).  Raising CC_SLOTS is ~free per conversation; keep
 # CC_MIB explicit so the worst case stays inside the box's real headroom.  Unset = shipped values.
+if os.environ.get("MTP_DIR"): setflag("--mtp",os.environ["MTP_DIR"])
 if os.environ.get("CC_SLOTS"): setflag("--conversation-cache-slots",os.environ["CC_SLOTS"])
 if os.environ.get("CC_MIB"): setflag("--conversation-cache-mib",os.environ["CC_MIB"])
 # conversation-disk cold tier (plan v2, 2026-11-20).  DISK_DIR turns the layer on; the rest are
