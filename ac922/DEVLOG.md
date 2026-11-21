@@ -694,7 +694,7 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
-### H.19 - Upstream followed to v0.2.15-nvfp4.4: zero-conflict bump, one CUDA-12.4 portability gate, dev lane green (11-21 01:15-02:45)
+### H.19 - Upstream followed to v0.2.15-nvfp4.4: zero-conflict bump, one CUDA-12.4 portability gate, dev lane green (11-21 morning, cards 4/5)
 
 - Sources swept: our fork line (sergqwer) published **.3 and .4** since our 11-18 pin; the sister
   V100 line is at 0.1.45.12 (+41); 1Cat-vLLM +161 (a haul of SM70 Qwen3.8 items - host-KV DCP,
@@ -716,12 +716,17 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   12.4 wants the 5-arg form (`5d27e85037`, one call site, same semantics - edgeData was nullptr).
   Server link note: the box lost github.com HTTPS resolution mid-bump; the one-commit relay went
   `format-patch -> scp -> git am --3way`, which is still the fallback when the server fetch dies.
-- Dev-lane verification (cards 4/5, ~02:30): GEOMETRY-PASS, vision auto-adds its flag as shipped,
+- Dev-lane verification (cards 4/5, ~10:30): GEOMETRY-PASS, vision auto-adds its flag as shipped,
   det x3 identical, 70K cold read 92.4 s (the 2-card dev lane is host-bound and slow by design -
   it verifies correctness and startup, not regime numbers).  Lane stopped, cards handed back.
-- Production deliberately **stays on the .2 binary** until the operator confirms the swap
-  (standing rule: ask before switching).  The .4 binary is built and waiting in
-  `bump-src/build/strata`; one `lane.sh 4 restart` ships it.
+- Production deliberately **stayed on the .2 binary** until the operator's go.  Ship note (11-21
+  10:57-11:12): after the confirmed `lane.sh 4 restart`, all three gates came back green on the
+  .4 binary - GEOMETRY-PASS (4 cards, 2 groups of 2), `qualgate check` **PASS** (acc-drift 1.08;
+  six relay-cell drift warnings are CC-cold re-materialisations after the overnight waves, not
+  numeric drift), decode-timing 27.22 ms/window inside the observed band.  No launch parameter
+  changed going .2 -> .4 (the .3 streaming default is gated to single-GPU/no-batch; the two env
+  names that looked absent are the python-layer `ADMIT_SHORT_FIRST` and the source-side
+  `PF_WMMA`, both verified present).
 
 ### H.18 - Wave J closed: the CPU pool's own shape is already tuned, and the deep-window `tg` finally measured (11-20 23:44 -> 11-21 00:45)
 
