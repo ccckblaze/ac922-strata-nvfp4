@@ -577,6 +577,12 @@ also confirm the flags themselves are not the axis: SH boots carried the same `-
 | `spec_min_p` 0.5 / 0.35 same-boot ladder | stays **dead ticket** | it was measured on a tuned-layer boot, but since RT≈SH the conclusion carries; do not re-run |
 | cold-adapt first-window msw outlier (37 ms on RT1) | recorded | first probe round after a boot is not a measurement; discard or pair it |
 
+**Gate-baseline discipline (H.21, same day):** after any bump containing numeric-path fixes,
+compare the COLD det against REF before believing a relay collapse - cold bit-identical plus
+relay 0/8 means the REF is stale (the .2-era REF was exactly this case: two relay cells proved
+bit-stable across independent .4 boots while the .4 upstream fixes moved the long-relay output
+path).  Re-baseline only with the old REF preserved as a backup, and remember the relay floor:
+cells agree only 2/8-8/8 gate-to-gate, so `rate>0` is a collapse detector, not a quality score.
 **Standing guard adopted with this verdict:** keep `mtp/rt-tuned` out of `<model data>/mtp/`
 unless an experiment explicitly puts it back, and re-verify `--mtp` in the live engine's
 cmdline after ANY bump or data-dir sync - the auto-detect will re-arm silently.

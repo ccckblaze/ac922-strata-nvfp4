@@ -694,6 +694,23 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.21 - QUALGATE-FAIL traced to a .2-era REF: .4 moved the long-relay numerics, cold det untouched; re-baselined and green (11-21 afternoon, 6 cards)
+
+- 15:31 `qualgate check` on the shipped-dense boot failed `relay-agreement-collapse 0/8` while
+  det x3 matched REF **bit-exactly** and acc sat at 1.133 (ok).  Comparison of the three probes
+  on disk (REF 00:43 = .2 binary; 11:09 = first .4 boot; 15:30 = current) showed 7 of 8 relay
+  cells had already left REF at 11:09 - the pass that morning rode the `rate>0` floor rule with
+  1/8 - and two cells (131000/32, 131000/8) were **bit-identical between the two independent
+  .4 boots**.  Verdict: the .4 upstream numeric fixes (NVFP4 down-kernel over-dispatch, FP16
+  prefill expert-offset) legitimately moved the long-relay/partial output path; the cold path
+  (det fixture) is unchanged.  Not a regression - a stale baseline.
+- Actions taken: old REF kept as `REF-v0.2.13-era.json.bak`, new baseline written at 15:42 on
+  the archive-config boot, `check` at 15:53 **QUALGATE-PASS** (relay 7/8, drift cell 64000/512
+  inside the reproducibility floor, acc 1.0).
+- Rule added to the gate discipline: after any bump containing numeric-path fixes, compare the
+  COLD det against REF first.  Cold identical + relay all-red means REF is stale, not the lane;
+  re-baseline with the old REF preserved.  Relay cells only ever agree 2/8-8/8 gate-to-gate.
+
 ### H.20 - Incident: the .4 auto-detect silently switched the draft layer; fair RT/SH A/B says the tuned layer is neutral (11-21 afternoon, 6 cards)
 
 - Root cause: `strata_control/drafting.py` `fork_tuned_mtp_dir()` looks for a complete
