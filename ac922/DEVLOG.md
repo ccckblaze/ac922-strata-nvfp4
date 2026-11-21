@@ -694,6 +694,35 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.19 - Upstream followed to v0.2.15-nvfp4.4: zero-conflict bump, one CUDA-12.4 portability gate, dev lane green (11-21 01:15-02:45)
+
+- Sources swept: our fork line (sergqwer) published **.3 and .4** since our 11-18 pin; the sister
+  V100 line is at 0.1.45.12 (+41); 1Cat-vLLM +161 (a haul of SM70 Qwen3.8 items - host-KV DCP,
+  per-token-head INT8 KV, concurrent MTP4 verify - worth a scheduled read, wrong stack to merge).
+- Sister's PR #118 was titled "tensorfold-v100" and is **not** one: 50 lines of opt-in direct
+  reads for packed expert arenas, and their own doc keeps the sentence that the QPN2 kernel gains
+  "must not be presented as a 10-19% serving speedup".  The 61% expert-product lever remains
+  unheld by anyone; the queue judgement stands.
+- Whole-version bump .2 -> **.4** (9 commits, zero conflicts, merge `7cea05840e`):
+  - .3 makes KV streaming the default **only on one CUDA card without --batch** - our split+batch
+    lanes never see the flip, and the 2-card dev lane is a split too, so dev stays comparable.
+  - .4 is mostly RTX 50 kernels (not applicable) plus portable build guards that push cp.async /
+    L2-policy loads / `gemm_f16c` behind cc>=8.0/9.0 - the same direction as our ppc64le fixes -
+    and **Basalt's self-distilled MTP draft layer** for the NVFP4-GPTQ set (`mtp/rt-tuned`,
+    pinned repo+revision+SHA256): a draft-upgrade candidate to A/B after this build ships
+    (acceptance-only change, target verification untouched - same class as spec knobs).
+- One real portability gap found by the compiler: upstream's draft-graph builder calls the
+  **6-arg `cudaGraphAddNode` with `cudaGraphEdgeData`** which only exists from CUDA 12.7; our
+  12.4 wants the 5-arg form (`5d27e85037`, one call site, same semantics - edgeData was nullptr).
+  Server link note: the box lost github.com HTTPS resolution mid-bump; the one-commit relay went
+  `format-patch -> scp -> git am --3way`, which is still the fallback when the server fetch dies.
+- Dev-lane verification (cards 4/5, ~02:30): GEOMETRY-PASS, vision auto-adds its flag as shipped,
+  det x3 identical, 70K cold read 92.4 s (the 2-card dev lane is host-bound and slow by design -
+  it verifies correctness and startup, not regime numbers).  Lane stopped, cards handed back.
+- Production deliberately **stays on the .2 binary** until the operator confirms the swap
+  (standing rule: ask before switching).  The .4 binary is built and waiting in
+  `bump-src/build/strata`; one `lane.sh 4 restart` ships it.
+
 ### H.18 - Wave J closed: the CPU pool's own shape is already tuned, and the deep-window `tg` finally measured (11-20 23:44 -> 11-21 00:45)
 
 - Three boot-level pool tickets, one variable per boot, deep window (~165K prompt, ~290 tokens
