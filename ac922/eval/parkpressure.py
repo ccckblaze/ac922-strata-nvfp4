@@ -21,7 +21,7 @@ Gate: every deep chain comes back with reused >= 90% and TTFT <= 12 s, and COLD 
 usage: parkpressure.py [--deep 2] [--deep-tok 148000] [--short 16] [--short-tok 8000] [--settle 60]
 env:   AB_URL  STRATA_API_KEY  AB_TIMEOUT
 """
-import json, os, threading, time, urllib.error, urllib.request
+import json, os, sys, threading, time, urllib.error, urllib.request
 
 URL = os.environ.get("AB_URL", "http://127.0.0.1:8091")
 KEY = os.environ.get("STRATA_API_KEY", "")
