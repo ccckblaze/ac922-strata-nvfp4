@@ -160,7 +160,19 @@ if batch<2 and groups<2 and ncard in (4,6):
 if batch>=2: setflag("--batch",batch)
 if groups>=2: setflag("--batch-groups",groups)
 if os.environ.get("SPEC_MIN_P"): setflag("--spec-min-p",os.environ["SPEC_MIN_P"])
-if os.environ.get("RESIDENT_GIB") is not None: setflag("--resident-budget-gib",os.environ["RESIDENT_GIB"])   # 0 = the arena-off replica proxy (expert streaming straight from the page cache)
+if os.environ.get("RESIDENT_GIB") is not None:
+    # RESIDENT_GIB=<n> sizes the arena; RESIDENT_GIB=off removes the flag, which is the only honest
+    # arena-off shape: the engine rejects `--resident-budget-gib 0` ("needs N > 0"), and with no flag
+    # at all it takes the automatic RAM copy - the experts live in the page cache, one copy shared
+    # across processes, which is what a multi-replica layout would read anyway (serve/replicas.py
+    # lists this flag as ARENA_INCOMPATIBLE).  Measured 2026-11-22: the 0 form never boots.
+    _rb = os.environ["RESIDENT_GIB"]
+    if _rb in ("off", "none", "-"):
+        while "--resident-budget-gib" in c["args"]:
+            i = c["args"].index("--resident-budget-gib"); del c["args"][i:i+2]
+        print("resident arena: OFF (no flag: the engine keeps the experts in the shared page cache)")
+    else:
+        setflag("--resident-budget-gib", _rb)
 # warm-resume geometry: a continuation re-reads back to the last checkpoint, and checkpoints land on
 # prefill chunk boundaries spaced ceil(PROMPT_CACHE_EVERY / chunk) chunks, so BOTH knobs have to move
 # together (EVERY <= chunk) or the gap floor stays at the chunk.  Unset = the shipped config's value.
