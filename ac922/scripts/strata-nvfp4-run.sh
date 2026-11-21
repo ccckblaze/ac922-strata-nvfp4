@@ -178,6 +178,20 @@ if os.environ.get("RESIDENT_GIB") is not None:
 # together (EVERY <= chunk) or the gap floor stays at the chunk.  Unset = the shipped config's value.
 if os.environ.get("PREFILL_CHUNK"): setflag("--prefill",os.environ["PREFILL_CHUNK"])
 if os.environ.get("PROMPT_CACHE_EVERY"): setflag("--prompt-cache-every",os.environ["PROMPT_CACHE_EVERY"])
+# EXTRA_ARGS is the generic passthrough for engine flags, so a verification arm never needs its own
+# knob.  Form: space-separated tokens; `--flag=value` sets a value flag (any earlier value pair is
+# dropped first), a bare `--flag` adds a boolean.  Processed last, so it wins over the knobs above.
+# Nothing happens when the variable is unset, which is the production path.
+for _tok in os.environ.get("EXTRA_ARGS", "").split():
+    if not _tok.startswith("--"):
+        c["args"].append(_tok); continue
+    _name, _sep, _val = _tok.partition("=")
+    while _name in c["args"]:
+        _i = c["args"].index(_name)
+        _j = _i + 2 if _i + 1 < len(c["args"]) and not c["args"][_i+1].startswith("--") else _i + 1
+        del c["args"][_i:_j]
+    c["args"] += [_name] + ([_val] if _sep else [])
+if os.environ.get("EXTRA_ARGS"): print("extra args:", os.environ["EXTRA_ARGS"])
 if os.environ.get("PROMPT_CACHE"): setflag("--prompt-cache",os.environ["PROMPT_CACHE"])
 # parked-conversation capacity: the ceiling that actually bites under concurrency is the SLOT count,
 # not the RAM budget (measured 2026-11-16: 98.5% of cache evictions land at parked==slots, with the
