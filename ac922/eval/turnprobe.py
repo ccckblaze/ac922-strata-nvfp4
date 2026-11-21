@@ -68,20 +68,29 @@ def ask(messages, gen):
             "reused_pct": round(100.0 * cached / ptok, 1) if ptok else None}
 
 
+def measure_tokens_per_unit():
+    """Prompt tokens per FILL copy, read back from the engine.  Hard-coding 48 makes every label a
+    lie (the real number here is ~26.6), and a sweep whose depths are wrong cannot show a switch point."""
+    probe = ask([{"role": "user", "content": FILL * 20}], 1)
+    return max(1.0, (probe["ptok"] or 480.0) / 20.0)
+
+
 def main():
     depths = [int(x) for x in flag("--depths", "4000,8000,16000,40000,80000").split(",")]
     gen = int(flag("--gen", "8"))
     nonce = int(time.time())
-    print("TURNPROBE url=%s gen=%d nonce=%d" % (URL, gen, nonce))
+    per = measure_tokens_per_unit()
+    print("TURNPROBE url=%s gen=%d nonce=%d tokens_per_unit=%.1f" % (URL, gen, nonce, per))
     for i, target in enumerate(depths):
-        units = max(1, int(target / 48))
+        units = max(1, int(target / per))
         stem = "Conversation %d of run %d. " % (i, nonce) + FILL * units
         cold = ask([{"role": "user", "content": stem}], gen)
         repeat = ask([{"role": "user", "content": stem}], gen)
         follow = ask([{"role": "user", "content": stem},
                       {"role": "assistant", "content": "Noted."},
                       {"role": "user", "content": "One line more, please."}], gen)
-        rec = {"depth": target, "cold": cold, "repeat": repeat, "follow": follow}
+        rec = {"depth": target, "cold": cold, "repeat": repeat, "follow": follow,
+               "units": units}
         print(json.dumps(rec, sort_keys=True), flush=True)
     print("TURNPROBE-DONE")
 
