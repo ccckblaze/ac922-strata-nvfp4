@@ -543,3 +543,17 @@ Switching also removed a real footgun: the reference config carried the 6-card b
 Also from the same wave: the "10.5 ms/window host-CPU experts" figure we carried is the
 *cold-adaptation* number; warmed it is 2-3 ms/window, so the remaining deep-window cost is the
 sm70 expert product itself (verify minus reach ~22 ms), which no pool knob touches.
+
+## Rejected - the MTP draft layer's cheap levers on the agent shape (Wave N, 2026-11-21, 6 cards)
+
+| Ticket | Idea | Measured | Verdict |
+| --- | --- | --- | --- |
+| `spec_min_p` 0.5 / 0.35 (same-boot ladder, shipped draft) | lower the draft gating threshold to buy acceptance depth at 185-247K | tg bands overlap the 0.7 default (tpw 2.31-2.49 everywhere); no sign beyond band | **dead ticket** - agent-shaped acceptance is already healthy; do not re-run |
+| `MTP_DIR=.../mtp/rt-tuned` | swap in the sister's tuned dense draft (their docs price +5.7~11.8%) | paired slices -4.9% and -14.1% tg; msw flat +1.4-1.7 ms/window, tpw not higher | **rejected** - the sister pricing does not transfer to this fork/shape |
+| `MTP_DIR=.../mtp/rt-tuned-code99` | rt-tuned + draft table widened to 127,440 ids (prod CJK + 2,703 code-corpus tokens) | paired slices -5.9% and -11.4% tg, same msw penalty signature | **rejected** - table widening moved neither tpw nor tg on the probe |
+
+Mechanism note: the user's live-session symptom (`avg T 1.00` at ~223K agent chains) is
+**content-specific** - tool-result JSON tokens sit outside the draft vocab - and is not
+reproduced by the code+tool probe (which runs ~2.4 tpw).  A full `codebig.txt` rebuild of the
+draft table stays parked; its motivation is weakened because the probe shape shows no
+acceptance deficit to fix.
