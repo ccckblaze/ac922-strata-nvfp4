@@ -614,5 +614,10 @@ decode, n=4, wall_tg medians:
   where run.sh silently forced (4,2) unless `STRATA_BATCH_GROUPS` env is passed): wall_tg
   ±2.5% at 8K, worst -5.6% at 50K, ±1.2% at 98K, ±2.2% at 131K.  Rule: effects under
   ~5% require paired boots; sweeps pass the shape via EXTRA env, never config alone.
-- Gate on the adopted boot: cold det bit-identical to REF (7/8 relay cells, acc ok -
-  H.21 discipline), QUALGATE-PASS recorded in runbook.
+- Gate on the adopted boot (21:42 formal restart): **QUALGATE-PASS** - cold det
+  bit-identical to REF, relay 2/8 inside the 2/8-8/8 known floor, acc-drift 0.953.
+  The first formal boot GEOMETRY-FAILed only because `lane.sh` still hard-coded
+  "groups of 2 slots"; the checker now follows the adopted shapes (4/4 -> 4 groups
+  of 1, 6-card 3 of 2).  Full-window smoke on the adopted shape: 4/4 `prompt_exact`
+  at 261,632 (prompt+gen = 262,144 exactly), 3/4 held the edge, one stream EOS-early
+  at 372/512 (content, same family as the 6-card precedent); sum_tg 117.2, span 21.4 s.
