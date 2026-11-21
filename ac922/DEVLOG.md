@@ -748,7 +748,15 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   the .4 bump commits are ancestors of `10b5df1a76`, not of that checkout.  Nobody served the wrong
   engine, but nobody could have rebuilt that tree and got the same engine either.  Both trees used by
   this wave are pinned to a commit that matches what they run before any measurement is taken.
-- Open when this entry was written: the Q2 (.4) and Q3 (.5) arm tables and the bump decision.
+- Wave Q2 came in on the shipping .4 lane (table in PERFORMANCE section 9b): dropping
+  `--resident-budget-gib` costs -16.2 % sum_tg at 98K and -23.3 % at 131K with rows/step unchanged
+  (`noarena`) - which is also the price the `replicas` idea has to pay, because that flag is on
+  `serve/replicas.py`'s `ARENA_INCOMPATIBLE` list; the DX pair is neutral-to-negative on V100 and inert
+  below 24 576 cells by construction; and `TOPK_COMPACT` turns out not to be reachable here at all -
+  the compact kernel needs `> TK_T * TK_PER = 33 792` blocks (about 270 K tokens) or the counted prompt
+  band, while our window tops out at 32 768 blocks.  Two of the wave's five tickets were therefore
+  decided by reading a gating condition instead of spending a boot on them.
+- Open when this entry was written: the wave-end anchor `ctlB` and the Q3 (.5) arm tables.
 
 ### H.22 - 4-card batch-shape calibration: the analysis's sweet spot was wrong, 4/4 wins; the noise floor got an accidental 3-boot replicate (11-21 evening, 4 cards)
 

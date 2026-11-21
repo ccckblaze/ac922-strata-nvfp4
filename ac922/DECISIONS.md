@@ -644,3 +644,28 @@ decode, n=4, wall_tg medians:
   `o.batch <= 1`, and the shipped shape is `--batch 6`.  An arm would have produced a pure-noise
   delta and it would have looked like a neutral result.  Reading the gating condition before booking
   a boot is now part of wave planning (METHODOLOGY section 2).
+
+## Priced, not adopted: a multi-engine `replicas` layout costs 16-27 % of deep-context decode (2026-11-22, 6 cards)
+
+The idea was to buy real concurrency by running three 2-card replicas instead of one 6-card split
+(`serve/replicas.py`).  Its hard precondition is dropping `--resident-budget-gib`, which is on the
+module's `ARENA_INCOMPATIBLE` list (:106) because replicas must not each lock a private arena.  We
+measured that precondition alone - same env, same binary, only the flag removed (`armtab` row
+`noarena`): 8K +3.3 %, 50K -2.7 %, **98K -16.2 %, 131K -23.3 % (tg_med -27.2 %)**, with rows/step
+unchanged and `wall_tg` at 131K falling 102.0 -> 67.1.  Without the page-locked complement the experts
+stream through the buffered file-cache arena (`MAP_HUGETLB unavailable: vm.nr_hugepages=0`, and only
+~9.6 GiB of free 2 MiB blocks on the two nodes against the 32 402 blocks the arena asks for), and the
+NUMA placement does not apply either.  So replicas does not multiply throughput for free: it pays this
+tax per replica, on the exact depths where we want concurrency.  Recorded as a priced trade, no
+adoption, no rejection - the arithmetic is the deliverable.
+
+## Rejected on mechanism, not measurement: `STRATA_TOPK_COMPACT` cannot fire in this lane (2026-11-22)
+
+The sister tree reports +3.5-4 % end-to-end decode for the compact long-row top-k, our own micro probe
+said 0.36 ms/window (~0.8 %).  Both numbers are irrelevant here because the dispatch condition cannot
+be met: `src/kernels/cuda/qsa_select.cu:3470-3476` takes the compact kernel when the row is past the
+register kernel's reach, `TK_T * TK_PER = 1024 * 33 = 33 792` blocks, or in the counted prompt band at
+`> 22 528` blocks with `active_blocks > 0`.  Our ceiling is `--max-context 262144`, i.e. 32 768 index
+blocks - below the register reach - and the ladder's deepest arm (131K) is 16 384.  The `topk` arm's
+four deltas (-3.2 %, -0.0 %, +1.3 %, -1.8 %) are the cross-boot band of section 9a, nothing more.  Any
+future claim for this knob must first name a shape that reaches 33 792 blocks.

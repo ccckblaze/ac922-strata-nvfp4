@@ -439,3 +439,49 @@ Measured (4-card boots, `phaseA/phaseC` harnesses, `AC922-bringup-runbook.md` §
 - known edge (open ticket, scheduler-side): a cold-prefill storm can race the write queue — the
   most recent chain may not be on disk yet when it is evicted, and that one resurrection falls to
   cold (94 s).  With the snapshot on disk, resurrection under concurrency costs 1.3 s.
+
+## 9. The nvfp4.5 read-through, the real cross-boot band, and three arms that could not fire (2026-11-22, 6 cards)
+
+### 9a. Anchors: how much a boot-to-boot difference is worth
+
+Same lane, same binary (`--batch 6 --batch-groups 3`, CC 48 GiB, resident complement 64 GiB, learned
+expert profile), four depths, 3 h 38 min apart:
+
+| depth | ctl22 sum_tg / tg_med | ctlA sum_tg / tg_med | rows/step | band |
+|---|---|---|---|---|
+| 8 000 (cold) | 108.1 / 12.8 | 107.3 / 12.9 | 3.42 / 3.43 | ~1 % |
+| 50 000 | 208.4 / 33.9 | 211.3 / 35.4 | 3.35 / 3.36 | 2-4 % |
+| 98 000 | 179.8 / 28.8 | 172.8 / 28.2 | 3.39 / 3.35 | ~4 % |
+| 131 000 | 160.5 / 26.1 | 146.9 / 23.5 | 3.24 / 3.27 | **8.5-10 %** |
+
+rows/step agrees to two decimals at every depth, so the shape is stable and what moves between boots
+is the speed inside the window.  Every arm in this wave is therefore read against that band, not
+against the 1.5 % used for same-boot pairs: at the deep end a single boot proves nothing below ~9 %.
+
+### 9b. Wave Q2 - env arms on the shipping .4 lane (all 6 cards, deltas against ctlA)
+
+| arm | what it changes | 8K | 50K | 98K | 131K | verdict |
+|---|---|---|---|---|---|---|
+| `noarena` | drop `--resident-budget-gib`: experts stream through the file-cache arena (`MAP_HUGETLB unavailable`, NUMA placement not applied) | +3.3 % | -2.7 % | **-16.2 %** | **-23.3 %** (tg_med -27.2 %) | **the page-locked complement is worth 16-27 % at deep context** - and it is the price `serve/replicas.py:106` makes a replica layout pay, since `--resident-budget-gib` is on its `ARENA_INCOMPATIBLE` list |
+| `dx` | `SELECT_LONG=1 SCORES_DX=1 SELECT_LONG_AT=24576` (the RTX 50 long-context block scorer) | -2.0 % | -2.5 % | -1.2 % | -5.2 % | no gain on V100.  8K/50K are inert by construction (the path needs a window graph over 24 576 cells, `src/core/verify.cpp:191-214`), so only 98K/131K are informative, and they are neutral-to-negative at or under the band |
+| `topk` | `TOPK_COMPACT=1` (sister claim: +3.5-4 % decode) | -3.2 % | -0.0 % | +1.3 % | -1.8 % | **cannot fire in this lane**: the compact path dispatches past the register kernel's reach, `TK_T * TK_PER = 1024 * 33 = 33 792` blocks, i.e. above ~270 K tokens, or in the counted prompt band (`> 22 528` blocks with `active_blocks > 0`) - our decode windows top out at 32 768 blocks (`src/kernels/cuda/qsa_select.cu:907,3470-3476`).  The four deltas are the band, not a ticket |
+
+### 9c. The mechanism audit is earning its keep
+
+Three of this wave's tickets turn out to be structurally inert here (session-elastic tables gated on
+`o.batch <= 1`; `TOPK_COMPACT` gated on a block count our window cannot reach; `SELECT_LONG` gated on
+a cell count the two shallow depths never reach).  Booking a boot for each of them would have produced
+four "neutral" rows and one wrong adoption - which is exactly what METHODOLOGY section 2 exists to stop.
+The rule that came out of it: before an arm is scheduled, name the condition that makes the code path
+run and check the lane can satisfy it.
+
+### 9d. What the bump itself changes for a V100 box
+
+`v0.2.15-nvfp4.4` -> `v0.2.15-nvfp4.5` keeps `project(strata VERSION 0.1.61)`, so the version string is
+not evidence; the knob inventory is (870 `STRATA_*` names in the .4 binary, 899 in .5).  Three of the
+30 new names act on **every** CUDA card rather than only the RTX 50 tables:
+`STRATA_KV_RESIDENT_FAST` (on unless `=0`, `src/kernels/cuda/kv_stream.cu:401`),
+`STRATA_MTP_MERGE_FAST` (on unless `=0`, `src/kernels/cuda/qsa_decode_attn.cu:1635`) and the opt-in
+`STRATA_MTP_ATTN_PIPE` (:1630).  `src/core/nv_defaults.cpp` carries sections for 8.6, 6.0, 12.1 and
+12.0 and none for 7.0, so nothing else is silently adopted on V100.  Their arms (`kfast0`, `mmerge`,
+`dxr`, `ilp`) follow in 9e.
