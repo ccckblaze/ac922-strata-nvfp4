@@ -176,8 +176,8 @@ case "$ACTION" in
     if [ "$REANCHOR" = 1 ]; then reanchor; fi
     exit 0
     ;;
-  stop)   bash "$RUN" stop;;
-  restart) bash "$RUN" stop; wait_free; sleep 5; "$0" "$CARDS" start $([ $REANCHOR = 1 ] && echo --reanchor);;
+  stop)   [ -f "$STATE" ] && bash "$HERE/lanearchive.sh" || true; bash "$RUN" stop;;
+  restart) [ -f "$STATE" ] && bash "$HERE/lanearchive.sh" || true; bash "$RUN" stop; wait_free; sleep 5; "$0" "$CARDS" start $([ $REANCHOR = 1 ] && echo --reanchor);;
   status) bash "$RUN" status; verify;;
   *) log "usage: $(basename $0) <4|6> <start|stop|restart|status> [--reanchor]"; exit 2;;
 esac
