@@ -3909,7 +3909,20 @@ bool FileExpertSource::pin_cache_complement(
                 return v == nullptr ? 1 : std::atoi(v);
             }();
             uint64_t free_now = 0;
-            numa.init(offsets, n_expert_, layer_blob_bytes_, role_bytes_);   // STRATA_NUMA_SPLIT: placed by the paced loop
+            // A raw-blob pack (the NVFP4 lane) carries no per-role sizes.  For placement the roles are only a range
+            // decomposition - the two slices cover the same pages for any triple summing to the blob - so synthesize
+            // near-equal thirds and let step B place the complement there too (GGUF-mapped packs keep their real roles).
+            std::vector<uint64_t> synth_roles;
+            const std::vector<uint64_t>* roles = &role_bytes_;
+            if (role_ptr_.empty() && role_bytes_.size() != 3 * layer_blob_bytes_.size()) {
+                synth_roles.reserve(3 * layer_blob_bytes_.size());
+                for (const uint64_t bb : layer_blob_bytes_) {
+                    const uint64_t third = bb / 3;
+                    synth_roles.insert(synth_roles.end(), {third, third, bb - 2 * third});
+                }
+                roles = &synth_roles;
+            }
+            numa.init(offsets, n_expert_, layer_blob_bytes_, *roles);   // STRATA_NUMA_SPLIT: placed by the paced loop
             if (numa.place) {
                 // the engine's own mapped model pages sit on whichever node read them, and a toucher on a full node
                 // gets its pages from the other one (no local reclaim): give them back first, as the guard=1 path does

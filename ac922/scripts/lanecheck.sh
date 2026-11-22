@@ -10,6 +10,11 @@
 # pass every gate).
 set -u
 CARDS=${1:-4}
+# the ship cards come from the lane state (the 4-card map is 0,1,3,4 now, not the first four);
+# an absent/stale state falls back to the old "first N cards" reading.
+LANE_STATE=${LANE_STATE:-/tmp/strata-nvfp4-lane.state}
+SHIP_GPUS=""
+[ -f "$LANE_STATE" ] && SHIP_GPUS=$(sed -n 's/^gpus=//p' "$LANE_STATE" | tail -1)
 LANE_ENV=${LANE_ENV:-/data/work/lane.env}
 LOGD=${LOGD:-/data/champion}
 ENG=${ENG:-$LOGD/strata-nvfp4-engine.log}
@@ -87,9 +92,10 @@ while IFS=$'\t' read -r k rest; do
       if [ "${rest:-0}" -lt 24 ]; then fail "MemAvailable ${rest} GiB (<24 GiB)"; else ok "MemAvailable ${rest} GiB"; fi;;
     *) ok "$k: $rest";;
   esac
-done < <(python3 - "$SLICE" "$CARDS" <<'PY'
+done < <(python3 - "$SLICE" "$CARDS" "$SHIP_GPUS" <<'PY'
 import re, statistics as st, subprocess, sys
 slice_path, cards = sys.argv[1], int(sys.argv[2])
+ship = [int(x) for x in sys.argv[3].split(",") if x.strip().isdigit()] if len(sys.argv) > 3 else []
 txt = open(slice_path, errors="replace").read()
 def emit(*a):
     print("\t".join(str(x) for x in a))
@@ -123,7 +129,9 @@ try:
     out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.used",
                                    "--format=csv,noheader,nounits"], universal_newlines=True)
     used = [x.strip() for x in out.strip().splitlines()]
-    emit("vram", "/".join(used[:cards]) + "|" + "/".join(used[cards:]))
+    if not ship:
+        ship = list(range(cards))
+    emit("vram", "/".join(used[i] for i in ship) + "|" + "/".join(used[i] for i in range(len(used)) if i not in ship))
 except Exception:
     pass
 avail = None

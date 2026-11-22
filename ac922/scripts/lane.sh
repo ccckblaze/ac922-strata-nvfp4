@@ -32,7 +32,7 @@ QUALGATE_DIR=${QUALGATE_DIR:-/data/work/qualgate}
 EVAL_DIR=${EVAL_DIR:-$REPO/ac922/eval}
 
 case "$CARDS" in
-  4) GPUS=${GPUS:-0,1,2,3};     EXPECT_GROUPS=4; EXPECT_ROWS=1 ;;
+  4) GPUS=${GPUS:-0,1,3,4};     EXPECT_GROUPS=4; EXPECT_ROWS=1 ;;   # 2 cards per island (0,1 node0; 3,4 node8)
   6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=3; EXPECT_ROWS=2 ;;
   *) echo "usage: $(basename $0) <4|6> <start|stop|restart|status> [--reanchor]"; exit 2 ;;
 esac
@@ -165,7 +165,11 @@ case "$ACTION" in
     wait_health || exit 1
     verify || exit 1
     card_mem | sed -n '1,6p'
-    [ "$CARDS" = 4 ] && { log "leftover cards 4/5:"; holders | grep -E "card 4|card 5" || log "  free"; }
+    if [ "$CARDS" != 6 ]; then
+      rest=""
+      for i in 0 1 2 3 4 5; do [[ ",$GPUS," == *",$i,"* ]] || rest="$rest card $i"; done
+      [ -n "$rest" ] && { log "leftover cards:${rest# }"; holders | grep -E "$(echo "$rest" | sed 's/ card \([0-9]\)/|card \1/g;s/^|//')" || log "  free"; }
+    fi
     # Exit status is the contract: `&& reanchor` left a successful boot returning 1 whenever
     # --reanchor was not passed, which silently aborted a chained `lane4.sh restart && <measure>`
     # run on 2026-11-17 (the geometry printed GEOMETRY-PASS and the harness never started).

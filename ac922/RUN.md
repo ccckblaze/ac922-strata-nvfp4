@@ -60,7 +60,7 @@ here works without touching `configs/strata-nvfp4-final.json`.
    both islands) and `LD_PRELOAD=numabind.so` (arena placement) — both are documented in
    `DECISIONS.md` and each is worth ~1% tg on its own.
    `start` refuses to launch across cards another lane already holds (the same occupancy guard the
-   dev lane uses) — otherwise the 6-card default silently straddles 4/5 while a dev or cooperating
+   dev lane uses) — otherwise the 6-card default silently straddles the dev cards while a dev or cooperating
    thread is live there; override deliberately with `FORCE=1`. `stop`/`status` are pidfile-tree
    scoped for the same reason: a box-wide `pkill -f "build/strata --serve"` once killed the other
    lane's engine while its supervisor kept answering `/health` 200 with nothing behind it.
@@ -104,13 +104,15 @@ and you conclude the boot hung when only your reader did), and read the verdict 
 
 ## Development lane on the leftover cards (requires operator authorization)
 
-Once the pinned lane holds the 4-card geometry (the shipped default, see step 3 above), cards
-4/5 free up for an independent dev/iteration instance:
+Once the pinned lane holds the 4-card geometry (the shipped default `0,1,3,4` — two cards per
+island, see step 3 above), the remaining cards `2,5` free up for an independent dev/iteration
+instance.  The split is deliberate: one dev card per island, so the dev lane sees the *same*
+cross-NUMA straddle as the ship lane (environment consistency for the NUMA tickets).
 
 ```
 bash ac922/scripts/devlane.sh check    # who holds the dev cards, RAM available
 bash ac922/scripts/lane4.sh start      # prod lane, 4 cards (default, geometry-gated)
-bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
+bash ac922/scripts/devlane.sh start    # dev lane on 2,5 at port 8092 (straddle mirror)
 ```
 
 - **Deep windows on two cards need a different shape than the ship lane.** The config the shipped
@@ -123,14 +125,14 @@ bash ac922/scripts/devlane.sh start    # dev lane on 4,5 at port 8092
   it for build checks, deep-window availability and bit-exactness - not to price a decode kernel
   (`DEVLOG.md` H.1).
 
-- **Occupancy guard**: `start` refuses if any process holds the dev cards — cards 4/5 may
+- **Occupancy guard**: `start` refuses if any process holds the dev cards (default `2,5`) — they may
   belong to a cooperating thread (e.g. I2V); preempt only deliberately with `FORCE=1`.
 - **NUMA**: GPU3-5 are the node8 NVLink triangle (cpus 88-175), GPU0-2 the node0 triangle.
-  `devlane.sh` binds its engine to the island its cards live on (`numactl --cpunodebind
-  --preferred`, auto-derived, override with `DEV_NUMA=off|<node>`), so dev staging never
-  pulls node0 bandwidth away from the production arena. It deliberately does **not** use
-  `numabind.so`/`NB_CUT` (that is the straddling lane's arena split) and does not re-run
-  `ple_park` — weight page cache is shared read-only between lanes.
+  When the dev cards live on one island, `devlane.sh` binds the engine to it (`numactl
+  --cpunodebind --preferred`, auto-derived, override with `DEV_NUMA=off|<node>`).  When they
+  **span** islands (the default `2,5`), it mirrors the ship lane instead: `LD_PRELOAD=numabind.so`
+  with `NB_CUT` = the node0 card share, so arena placement behaves like production.  It does not
+  re-run `ple_park` — weight page cache is shared read-only between lanes.
 - **Sizing** (env-overridable): `DEV_MAX_CONTEXT=131072 DEV_KV_RESIDENT=16384
   DEV_CC_MIB=32768 DEV_CC_SLOTS=4 DEV_RESIDENT_GIB=16`, batch pair follows the card count
   (2/1). These keep the dev lane's new RAM footprint (host-tier KV) small enough that the

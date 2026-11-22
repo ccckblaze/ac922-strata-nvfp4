@@ -90,14 +90,48 @@ start(){
   # the dev lane — see adopted-env.sh (SM70_TABLE / PF_WMMA / FUSE_DECODE / ARGMAX_ROWS_SM70 /
   # select-simt / batchenv, all default-on unless the caller overrides).
   . "$HERE/adopted-env.sh"
-  GPUS=${GPUS:-0,1,2,3}
+  GPUS=${GPUS:-0,1,3,4}
   export CUDA_VISIBLE_DEVICES="$GPUS"
   IFS=, read -ra _G <<< "$GPUS"
-  case ${#_G[@]} in
-    4) _CUT=0.69 ;;   # 3 cards on node0, 1 on node8
-    6) _CUT=0.5 ;;     # symmetric 3:3
-    *) _CUT=0.5 ;;
-  esac
+  # NB_CUT is the arena's node0 share, so it follows the cards' real islands, not the card count:
+  # the fraction of $GPUS whose NUMA node is the lowest-numbered one (2+2 and 3+3 give 0.5, the old
+  # 3+1 gives 0.75-ish).  sysfs numa_node with the 8-digit PCI domain normalised, `topo -m` fallback.
+  _CUT=$(/usr/bin/python3.11 - "$GPUS" <<'PY'
+import subprocess,sys
+want=[x.strip() for x in sys.argv[1].split(",") if x.strip()]
+def norm(b):
+    p=b.split(":"); p[0]="%04x"%int(p[0],16); return ":".join(p).lower()
+topo=None
+def via_topo(idx):
+    global topo
+    try:
+        if topo is None: topo=subprocess.check_output(["nvidia-smi","topo","-m"],text=True).splitlines()
+        hdr=[c.strip() for c in topo[0].split("\t")]
+        k=[j for j,c in enumerate(hdr) if "NUMA Affinity" in c]
+        if not k: return None
+        for r in topo[1:]:
+            f=r.split("\t")
+            if f and f[0].strip()=="GPU"+idx: return f[k[0]].strip() or None
+    except Exception: pass
+    return None
+node={}
+for l in subprocess.check_output(["nvidia-smi","--query-gpu=index,pci.bus_id","--format=csv,noheader"],text=True).splitlines():
+    i,b=[x.strip() for x in l.split(",",1)]
+    if i not in want: continue
+    a=norm(b); got=None
+    for p in ("/sys/bus/pci/devices/%s/numa_node"%a,"/sys/bus/pci/devices/%s/device/numa_node"%a):
+        try:
+            v=open(p).read().strip()
+            if v and v!="-1": got=v; break
+        except Exception: pass
+    node[i]=got if got is not None else via_topo(i)
+if any(v is None for v in node.values()):
+    print(""); sys.exit(0)
+lo=min(node.values())
+print("%.4f" % (sum(1 for v in node.values() if v==lo)/len(node)))
+PY
+)
+  [ -z "$_CUT" ] && { case ${#_G[@]} in 4) _CUT=0.69 ;; *) _CUT=0.5 ;; esac; echo "NB_CUT probe failed; card-count fallback $_CUT"; }
   export NB_CUT=${NB_CUT:-$_CUT}
   # The default geometry is 6-card, so a bare `start` on a box whose 4/5 cards belong to the dev lane
   # (or to a cooperating thread) used to silently straddle all six.  Refuse unless the cards are free.

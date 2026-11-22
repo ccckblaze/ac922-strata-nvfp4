@@ -2,16 +2,16 @@
 # AC922 dev lane: iterate on the leftover cards without touching the pinned lane.
 #
 # Two-lane policy (RUN.md "Development lane"):
-#   production  GPUS 0,1,2,3 (B4, NB_CUT 0.69) or 0-5 (B6)   port 8091  strata-nvfp4-run.sh
-#   dev lane    GPUS 4,5 (NUMA node8 NVLink triangle)         port 8092  this script
+#   production  GPUS 0,1,3,4 (B4, NB_CUT follows the islands: 2+2 -> 0.5) or 0-5 (B6)   port 8091
+#   dev lane    GPUS 2,5 (one card per island - the same straddle the ship lane has)      port 8092
 # Rules enforced here:
-#   - Cards 4/5 may belong to another cooperating thread (I2V etc.): start refuses to launch
+#   - The dev cards may belong to another cooperating thread (I2V etc.): start refuses to launch
 #     on top of any occupancy unless FORCE=1; `check` reports who holds the cards.
-#   - NUMA: GPU3-5 sit on node8 (cpus 88-175), GPU0-2 on node0. The dev engine is bound to the
-#     island its cards live on (cpunodebind + preferred mem), so its arena/staging does not
-#     reach across the interconnect and steal node0 bandwidth from the production lane.
-#     The dev lane does NOT use numabind.so/NB_CUT (that is the straddling-lane's arena split)
-#     and does NOT re-run ple_park (page cache is shared read-only between lanes).
+#   - NUMA: GPU0-2 sit on node0, GPU3-5 on node8 (cpus 88-175).  A dev lane whose cards live on
+#     one island is bound to it (cpunodebind + preferred mem).  A dev lane that SPANS islands
+#     (the default 2,5) mirrors the production straddle instead: numabind.so + NB_CUT = the node0
+#     card share, so dev prices the same memory behaviour the ship lane has.  Either way dev does
+#     NOT re-run ple_park (page cache is shared read-only between lanes).
 #   - stop kills only its own process tree — never the broad pkill used by the prod launcher.
 # Sizing defaults shrink the host-tier budgets (RAM page cache for weights is shared with the
 # prod lane, so the dev lane's real new footprint is KV host tier + expert cache VRAM).
@@ -24,7 +24,7 @@ LOGD=${LOGD:-/data/champion}
 BASE=${DEV_BASE:-$REPO/ac922/configs/strata-nvfp4-final.json}
 RUN=${DEV_RUN_JSON:-/data/work/strata-nvfp4-dev.json}
 PIDF=${DEV_PIDF:-/tmp/strata-nvfp4-dev.pid}
-DEV_GPUS=${DEV_GPUS:-4,5}
+DEV_GPUS=${DEV_GPUS:-2,5}
 DEV_PORT=${DEV_PORT:-8092}
 DEV_MAX_CONTEXT=${DEV_MAX_CONTEXT:-131072}
 DEV_KV_RESIDENT=${DEV_KV_RESIDENT:-16384}
@@ -121,14 +121,66 @@ for l in subprocess.check_output(["nvidia-smi","--query-gpu=index,pci.bus_id","-
 if len(nodes)==1 and None not in nodes: print(nodes.pop())
 PY
 )
-  [ -n "$node" ] && echo "numactl --cpunodebind=$node --preferred=$node"
+  if [ -z "$node" ]; then
+    # the cards span islands (or the probe failed): the straddle mirror is decided by the caller
+    echo "STRADDLE"
+    return
+  fi
+  echo "numactl --cpunodebind=$node --preferred=$node"
 }
 start(){
   local st; check; st=$?
   if [ "$st" -ne 0 ] && [ "${FORCE:-0}" != "1" ]; then
-    echo "refusing to start: dev cards occupied (see BUSY lines). Use FORCE=1 only after"; echo "confirming the holder is yours to preempt — cards 4/5 may serve another thread (I2V)."; exit 2; fi
+    echo "refusing to start: dev cards occupied (see BUSY lines). Use FORCE=1 only after"; echo "confirming the holder is yours to preempt — the dev cards may serve another thread (I2V)."; exit 2; fi
   local NA; NA=$(numa_args)
-  [ -n "$NA" ] && echo "NUMA bind: $NA" || echo "NUMA bind: none (mixed island or numactl unavailable) — DEV_NUMA to override"
+  if [ "$NA" = "STRADDLE" ]; then
+    # one card per island: same mechanism as the ship lane - the mmap hook splits the expert arena
+    local SO=${NUMABIND_SO:-/data/work/numabind.so} frac
+    frac=$(/usr/bin/python3.11 - "$DEV_GPUS" <<'PY'
+import subprocess,sys
+want=[x.strip() for x in sys.argv[1].split(",") if x.strip()]
+def norm(b):
+    p=b.split(":"); p[0]="%04x"%int(p[0],16); return ":".join(p).lower()
+topo=None
+def via_topo(idx):
+    global topo
+    try:
+        if topo is None: topo=subprocess.check_output(["nvidia-smi","topo","-m"],text=True).splitlines()
+        hdr=[c.strip() for c in topo[0].split("\t")]
+        k=[j for j,c in enumerate(hdr) if "NUMA Affinity" in c]
+        if not k: return None
+        for r in topo[1:]:
+            f=r.split("\t")
+            if f and f[0].strip()=="GPU"+idx: return f[k[0]].strip() or None
+    except Exception: pass
+    return None
+node={}
+for l in subprocess.check_output(["nvidia-smi","--query-gpu=index,pci.bus_id","--format=csv,noheader"],text=True).splitlines():
+    i,b=[x.strip() for x in l.split(",",1)]
+    if i not in want: continue
+    a=norm(b); got=None
+    for p in ("/sys/bus/pci/devices/%s/numa_node"%a,"/sys/bus/pci/devices/%s/device/numa_node"%a):
+        try:
+            v=open(p).read().strip()
+            if v and v!="-1": got=v; break
+        except Exception: pass
+    node[i]=got if got is not None else via_topo(i)
+if any(v is None for v in node.values()): print("0.5"); sys.exit(0)
+lo=min(node.values())
+print("%.4f" % (sum(1 for v in node.values() if v==lo)/len(node)))
+PY
+)
+    if [ -f "$SO" ]; then
+      export LD_PRELOAD="$SO" NB_CUT="${frac:-0.5}"
+      echo "NUMA bind: straddle mirror (LD_PRELOAD $SO, NB_CUT=${NB_CUT:-0.5})"
+    else
+      echo "NUMA bind: WARNING straddling cards without $SO - arena placement falls to first touch"
+    fi
+  elif [ -n "$NA" ]; then
+    echo "NUMA bind: $NA"
+  else
+    echo "NUMA bind: none (numactl unavailable) — DEV_NUMA to override"
+  fi
   /usr/bin/python3.11 - "$BASE" "$RUN" "$SRC" "$MODEL_DIR" "$LOGD" "$DEV_GPUS" "$DEV_MAX_CONTEXT" "$DEV_KV_RESIDENT" "$DEV_CC_MIB" "$DEV_CC_SLOTS" "$DEV_RESIDENT_GIB" "$DEV_VISION" <<'PY'
 import json,os,sys
 base,out,src,model_dir,logd,gpus,mctx,kvr,ccmib,ccslots,resgib,vision=sys.argv[1:13]
