@@ -12,6 +12,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(strata VERSION 0.1.61 LANGUAGES CXX)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/strata_geometry.cmake)   # -DSTRATA_GEOMETRY=<name>: the model shape the kernels are compiled for (default flash_next, no flag added)
+# cmake/strata_ppc_cpu.cmake - POWER cpu generation flags (auto-detect; x86/ARM no-op), before any target exists.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/strata_ppc_cpu.cmake)
 # The build is cut by backend (cleanup 5.4): each file below only DEFINES macros (strata_<part>()), which run here, in this scope, at the place their
 # block used to be - so this file reads in the order the old single CMakeLists.txt evaluated.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/strata_ggml.cmake)          # which ggml: the vendored third_party/strata-ggml, or -DSTRATA_GGML_DIR
