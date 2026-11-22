@@ -1314,3 +1314,9 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     0.38-0.50 s, short band fixed), so the accident became the side evidence that killed upstream's
     default of `0` for a different reason - slot squatting by 200-token one-shots.  Never quietly
     re-roll a boot to erase the accident: harvest it, label it, and say which quoting rule made it.
+20. A hard-reset workspace does not invalidate a build directory's *knowledge*.  After `git reset
+    --hard`, an old configure fingerprint still links: gmake builds what the stale target lists contain
+    and the new sources simply are not in them - the failure surfaces late, as undefined references at
+    link time, after an hour of plausible-looking compiles.  Reconfigure before trusting any incremental
+    build that crosses a reset, and diff the flags of the fresh configure against the live cache (a
+    compiler-default flag that never appears in either, like `-mcpu`, is invisible to both).
