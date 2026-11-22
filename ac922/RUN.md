@@ -102,6 +102,18 @@ actually matter: never pipe the start into `tail`/`head` (the pipe keeps the who
 and you conclude the boot hung when only your reader did), and read the verdict with
 `bash ac922/scripts/lane4.sh status`, which re-runs the same geometry proof read-only.
 
+## Lane archive (per-boot evidence, from `39ccd670c`)
+
+Every `lane.sh <4|6> stop|restart` archives the boot it is about to end into
+`/data/work/lane-archive/<UTC-ts>-<cards>c-boot<boot-ts>/`: the engine log slice for exactly that
+boot (the lane state's `off=` watermark is the byte boundary), `run.json` (the full engine argument
+set), the `lane.env` with the API key stripped, the serve stdout log (restart causes), and a
+`manifest.json` with the boot window and the `lane.sh` commit.  Last 40 boots are kept.  Use it
+before any boot-over-boot comparison: `decodetiming_watch.py`-style parsing over
+`engine.log.slice.gz` compares two configurations on identical shapes without guessing where one
+boot's log ended.  Standalone: `bash ac922/scripts/lanearchive.sh` (archives the live boot "mid-way"
+- the window then ends at the archive moment).
+
 ## Development lane on the leftover cards (requires operator authorization)
 
 Once the pinned lane holds the 4-card geometry (the shipped default `0,1,3,4` — two cards per
