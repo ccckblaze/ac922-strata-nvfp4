@@ -176,6 +176,9 @@ PY
     else
       echo "NUMA bind: WARNING straddling cards without $SO - arena placement falls to first touch"
     fi
+    NA=""            # the straddle binds through LD_PRELOAD, not a numactl prefix: never let the
+                     # literal "STRADDLE" marker reach `setsid $NA` (dev 2,5 died this way 11-22:
+                     # setsid tried to execute it as the command word)
   elif [ -n "$NA" ]; then
     echo "NUMA bind: $NA"
   else
