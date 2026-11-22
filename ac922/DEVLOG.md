@@ -1404,3 +1404,9 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     link time, after an hour of plausible-looking compiles.  Reconfigure before trusting any incremental
     build that crosses a reset, and diff the flags of the fresh configure against the live cache (a
     compiler-default flag that never appears in either, like `-mcpu`, is invisible to both).
+21. A probe that drifts across boots cannot adjudicate a one-time codegen change.  The same p9
+    binary, booted twice, disagreed with itself at 3 of 4 divprobe points at 110 K depth - adaptive
+    residency sets differ per boot and greedy cascades amplify one near-tie - and one of those boots
+    agreed with the *other arm*.  Before any cross-boot A/B, re-run the probe on the *unchanged* thing
+    across two boots; for suspected-numerics changes, score against a yardstick that pins residency
+    (quant_quality: expert-cache 1, adaptation off) instead of a traffic-shaped probe.
