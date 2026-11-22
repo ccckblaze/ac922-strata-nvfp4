@@ -706,6 +706,21 @@ struct NumaComplementPlacement {
         }
     }
 
+    /// Does the placement need the model pages dropped at all?  The drop exists so a toucher on a
+    /// full node never feeds on the other island's reclaim; when free_before already shows every
+    /// node holding its slice plus the reserve share, the drop only erases pages the serving
+    /// requests would then fault back through the files tier (measured 2026-11-22: the first
+    /// enabling on this box dropped a healthy cache under deep concurrency and one request
+    /// re-read 52.7 GB at 12x amplification - thrash that rode the verify GPU work past the 5 s
+    /// watchdog).  True = at least one node is tight, judged with check_room's own yardstick.
+    bool needs_drop(uint64_t reserve_share) const {
+        for (int k = 0; k < 2; ++k) {
+            const uint64_t room = (size_t) nodes[k] < free_before.size() ? free_before[(size_t) nodes[k]] : 0;
+            if (room < slice_bytes[k] + reserve_share) return true;
+        }
+        return false;
+    }
+
     /// After the drop: a node whose free memory cannot take its slice plus `reserve_share` will spill to the other node
     /// (no local reclaim); named up front, the 95 % check stays the verdict.
     void check_room(uint64_t reserve_share) const {
@@ -3926,11 +3941,18 @@ bool FileExpertSource::pin_cache_complement(
             if (numa.place) {
                 // the engine's own mapped model pages sit on whichever node read them, and a toucher on a full node
                 // gets its pages from the other one (no local reclaim): give them back first, as the guard=1 path does
-                drop_file_cache();
-                numa.free_after = NumaComplementPlacement::node_free();
-                std::fprintf(stderr, "FileExpertSource: NUMA placement: the model files' cached pages were released; "
-                                     "free after the drop: %s\n",
-                             NumaComplementPlacement::free_text(numa.free_after).c_str());
+                // - but only when a node is actually tight (needs_drop); dropping a roomy cache is pure later thrash
+                if (numa.needs_drop(pace_reserve / 2)) {
+                    drop_file_cache();
+                    numa.free_after = NumaComplementPlacement::node_free();
+                    std::fprintf(stderr, "FileExpertSource: NUMA placement: the model files' cached pages were released; "
+                                         "free after the drop: %s\n",
+                                 NumaComplementPlacement::free_text(numa.free_after).c_str());
+                } else {
+                    numa.free_after = numa.free_before;
+                    std::fprintf(stderr, "FileExpertSource: NUMA placement: every node already holds its slice plus "
+                                         "reserve - the global cache drop is skipped\n");
+                }
                 // CBA: half the pace reserve as each node's share of the headroom; a per-node reserve if one node
                 // carries the host's other allocations
                 numa.check_room(pace_reserve / 2);
