@@ -11,6 +11,7 @@
 #include "strata/platform/aux_cpus.hpp"
 #include "strata/core/remote_experts.hpp"
 #include "strata/core/peer_experts.hpp"
+#include "strata/kernels/cpu/card_node.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
 #include "strata/kernels/window_limits.hpp"
 #include "strata/artifact/gguf_reader.hpp"
@@ -544,18 +545,23 @@ bool free_memory_bytes(uint64_t& bytes) {
     text << info.rdbuf();
     bytes = detail::meminfo_bytes(text.str(), "MemFree");
     if (bytes == 0) return false;
-    // 0.1.42: a multi-socket host's nodes each have their own free pages; judge by the emptiest one too
+    // 0.1.42: a multi-socket host's nodes each have their own free pages; judge by the emptiest one too.
+    // Node ids are sparse - the AC922 numbers its two memory nodes 0 and 8 and hangs the six V100s off
+    // memoryless nodes 250-255 - so a missing directory is not the end of the list, and a node without CPUs
+    // holds a device's memory, never pages the host allocator can take.  Stopping at the first missing
+    // directory made a sparse host look single-node, which silently disabled this guard and gave the
+    // placement the same false verdict (measured 2026-11-22).
     std::vector<uint64_t> nodes;
     for (int n = 0; n < 64; ++n) {
-        std::ifstream node("/sys/devices/system/node/node" + std::to_string(n) + "/meminfo");
-        if (!node) break;
-        std::string line;
-        while (std::getline(node, line)) {
-            std::istringstream f(line);
-            std::string a, id, key;
-            uint64_t kb = 0;
-            if (f >> a >> id >> key >> kb && key == "MemFree:") { nodes.push_back(kb * 1024); break; }
+        const int64_t node_free = strata::kernels::cpu::card_node_free_bytes("/sys", n);
+        if (node_free < 0) continue;
+        std::ifstream cpulist("/sys/devices/system/node/node" + std::to_string(n) + "/cpulist");
+        if (cpulist) {
+            std::string ids;
+            std::getline(cpulist, ids);
+            if (ids.empty()) continue;
         }
+        nodes.push_back((uint64_t) node_free);
     }
     bytes = detail::numa_pin_free(bytes, nodes);
     return bytes > 0;
@@ -595,35 +601,25 @@ struct NumaComplementPlacement {
     int core[2] = {-1, -1};
     std::vector<std::pair<uint64_t, uint64_t>> ranges[2];   ///< page-aligned, sorted, coalesced, arena offsets
     uint64_t slice_bytes[2] = {0, 0};
-    std::vector<uint64_t> free_before;                      ///< MemFree per node before the allocation
-    std::vector<uint64_t> free_after;                       ///< the same after the model files' pages are released
+    int64_t free_before[2] = {-1, -1};    ///< MemFree of each slice's node before the allocation (-1: not known)
+    int64_t free_after[2] = {-1, -1};     ///< the same after the model files' pages are released
     std::atomic<bool> pin_failed{false};
     std::chrono::steady_clock::time_point t0;
 
-    static std::vector<uint64_t> node_free() {
-        // CBA: stops at the first missing node directory (as free_memory_bytes does), sparse node ids give a false
-        // "at risk 0.00" line only; list the node directory if a sparse-id host ever shows it
-        std::vector<uint64_t> out;
-        for (int n = 0; n < 64; ++n) {
-            std::ifstream node("/sys/devices/system/node/node" + std::to_string(n) + "/meminfo");
-            if (!node) break;
-            std::string line;
-            uint64_t kb = 0;
-            while (std::getline(node, line)) {
-                std::istringstream f(line);
-                std::string a, id, key;
-                if (f >> a >> id >> key >> kb && key == "MemFree:") break;
-                kb = 0;
-            }
-            out.push_back(kb * 1024);
-        }
-        return out;
+    /// The really-free pages of each slice's node, read now.  Keyed by node number rather than by position:
+    /// ids are sparse (the AC922's two memory nodes are 0 and 8), so the old walk over the directories stopped
+    /// at node1 and every slice after the first read as 0.00 GiB free - a host that is always tight, so the
+    /// files' cached pages were released on every start whatever they held (measured 2026-11-22).
+    void sample_free(int64_t (&frees)[2]) const {
+        for (int k = 0; k < 2; ++k) frees[k] = strata::kernels::cpu::card_node_free_bytes("/sys", nodes[k]);
     }
-    static std::string free_text(const std::vector<uint64_t>& free) {
+    std::string free_text(const int64_t (&frees)[2]) const {
         std::string s;
-        char buf[64];
-        for (size_t n = 0; n < free.size(); ++n) {
-            std::snprintf(buf, sizeof buf, "%snode %zu %.2f GiB", n ? ", " : "", n, (double) free[n] / 1073741824.0);
+        char buf[80];
+        for (int k = 0; k < 2; ++k) {
+            if (frees[k] < 0) std::snprintf(buf, sizeof buf, "%snode %d not known", k ? ", " : "", nodes[k]);
+            else std::snprintf(buf, sizeof buf, "%snode %d %.2f GiB", k ? ", " : "", nodes[k],
+                               (double) frees[k] / 1073741824.0);
             s += buf;
         }
         return s;
@@ -635,7 +631,6 @@ struct NumaComplementPlacement {
         // relies on the pool being built first (generate.cpp: the ExpertPool at ~5632, the complement at ~7690)
         const auto& plan = strata::kernels::cpu::active_numa_split();
         if (!plan.on || plan.test) return;
-        free_before = node_free();
         const char* why = nullptr;
         if (role_bytes.size() != 3 * blob_bytes.size()) why = "this pack has no per-role byte sizes (not a GGUF-mapped native pack)";
         for (size_t l = 0; why == nullptr && l < blob_bytes.size(); ++l)
@@ -667,6 +662,7 @@ struct NumaComplementPlacement {
             }
             for (const auto& r : ranges[k]) slice_bytes[k] += r.second - r.first;
         }
+        sample_free(free_before);   // the nodes are known only once the plan has been accepted
         place = true;
         t0 = std::chrono::steady_clock::now();
         std::fprintf(stderr, "FileExpertSource: NUMA placement of the complement: slice 0 -> node %d (%.2f GiB, toucher "
@@ -714,10 +710,8 @@ struct NumaComplementPlacement {
     /// re-read 52.7 GB at 12x amplification - thrash that rode the verify GPU work past the 5 s
     /// watchdog).  True = at least one node is tight, judged with check_room's own yardstick.
     bool needs_drop(uint64_t reserve_share) const {
-        for (int k = 0; k < 2; ++k) {
-            const uint64_t room = (size_t) nodes[k] < free_before.size() ? free_before[(size_t) nodes[k]] : 0;
-            if (room < slice_bytes[k] + reserve_share) return true;
-        }
+        for (int k = 0; k < 2; ++k)
+            if (free_before[k] < 0 || (uint64_t) free_before[k] < slice_bytes[k] + reserve_share) return true;
         return false;
     }
 
@@ -725,11 +719,15 @@ struct NumaComplementPlacement {
     /// (no local reclaim); named up front, the 95 % check stays the verdict.
     void check_room(uint64_t reserve_share) const {
         for (int k = 0; k < 2; ++k) {
-            const uint64_t room = (size_t) nodes[k] < free_after.size() ? free_after[(size_t) nodes[k]] : 0;
-            if (room < slice_bytes[k] + reserve_share)
+            if (free_after[k] >= 0 && (uint64_t) free_after[k] >= slice_bytes[k] + reserve_share) continue;
+            if (free_after[k] < 0)
+                std::fprintf(stderr, "FileExpertSource: WARNING: NUMA placement at risk: node %d reports no free memory "
+                                     "for its %.2f GiB slice plus %.2f GiB of reserve\n",
+                             nodes[k], (double) slice_bytes[k] / 1073741824.0, (double) reserve_share / 1073741824.0);
+            else
                 std::fprintf(stderr, "FileExpertSource: WARNING: NUMA placement at risk: node %d has %.2f GiB free for its "
                                      "%.2f GiB slice plus %.2f GiB of reserve\n",
-                             nodes[k], (double) room / 1073741824.0, (double) slice_bytes[k] / 1073741824.0,
+                             nodes[k], (double) free_after[k] / 1073741824.0, (double) slice_bytes[k] / 1073741824.0,
                              (double) reserve_share / 1073741824.0);
         }
     }
@@ -3941,17 +3939,30 @@ bool FileExpertSource::pin_cache_complement(
             if (numa.place) {
                 // the engine's own mapped model pages sit on whichever node read them, and a toucher on a full node
                 // gets its pages from the other one (no local reclaim): give them back first, as the guard=1 path does
-                // - but only when a node is actually tight (needs_drop); dropping a roomy cache is pure later thrash
-                if (numa.needs_drop(pace_reserve / 2)) {
+                // - but only when a node is actually tight (needs_drop); dropping a roomy cache is pure later thrash.
+                // What an unneeded release costs here: the mmap fallback reads those same pages back, and under deep
+                // concurrency one request re-read 52.7 GB at ~12x amplification, riding the GPU's verify work past the
+                // 5 s watchdog (#267: four crashes in one start, 2026-11-22).
+                // STRATA_NUMA_DROP=auto (default) follows needs_drop's verdict, =never keeps the pages (the paced
+                // page-lock then runs against reclaimed cache alone), =always releases them as before.
+                static const std::string drop_mode = [] {
+                    const char* v = std::getenv("STRATA_NUMA_DROP");
+                    return std::string(v != nullptr && *v != '\0' ? v : "auto");
+                }();
+                const bool drop = drop_mode == "never" ? false
+                                : drop_mode == "always" ? true : numa.needs_drop(pace_reserve / 2);
+                if (drop) {
                     drop_file_cache();
-                    numa.free_after = NumaComplementPlacement::node_free();
+                    numa.sample_free(numa.free_after);
                     std::fprintf(stderr, "FileExpertSource: NUMA placement: the model files' cached pages were released; "
                                          "free after the drop: %s\n",
-                                 NumaComplementPlacement::free_text(numa.free_after).c_str());
+                                 numa.free_text(numa.free_after).c_str());
                 } else {
-                    numa.free_after = numa.free_before;
-                    std::fprintf(stderr, "FileExpertSource: NUMA placement: every node already holds its slice plus "
-                                         "reserve - the global cache drop is skipped\n");
+                    numa.sample_free(numa.free_after);
+                    std::fprintf(stderr, "FileExpertSource: NUMA placement: %s\n",
+                                 drop_mode == "never" ? "STRATA_NUMA_DROP=never: the model files' cached pages are kept"
+                                                      : "every node already holds its slice plus reserve - the global "
+                                                        "cache drop is skipped");
                 }
                 // CBA: half the pace reserve as each node's share of the headroom; a per-node reserve if one node
                 // carries the host's other allocations
