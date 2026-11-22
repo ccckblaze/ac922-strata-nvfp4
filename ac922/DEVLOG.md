@@ -694,6 +694,53 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.31 - what "production is slow" actually was: one cold read holds the control lines (11-23 00:4x-01:3x, 4-card production)
+
+- **What this was.**  The operator saw single requests at 0.8-1.3 tok/s on the 4-card lane and moved traffic
+  away.  The lane itself was healthy: 46 real requests, 0 verify timeouts, 0 respawns, file tier 0.0 MB / 0
+  faults (yesterday's thrash pathology is gone), `qualgate check lane4` PASS at acc-drift 1.0.  So the number
+  was not compute, VRAM, or placement - it was queueing, and this entry pins which queue.
+- **The mechanism, measured.**  A cold deep prompt takes the control lines (`serve/server.py`: one prompt read
+  at a time) and holds them for the *whole* read.  A 64-token request sent 12 s behind a ~220K cold prompt
+  waits 52-74 s for the lock, then decodes normally: the trace shows it landing in a batch slot
+  (`send> BGEN 2 64 ... BADM 2 1`) at 47.1 tok/s, and its own read reporting "282 of 287 tokens, 72 s so
+  far".  `serve`'s tok/s is tokens/total-elapsed, so the wait prints as slowness.
+- **Ticket #656 (`BYIELD`) does not fire on this build.**  A long read is supposed to give way at a chunk
+  boundary to a much shorter waiting one (`give_way`, YIELDS_MAX=2).  Across 6 boots and 8 paired probes the
+  engine-side counter is **0** (`BYIELD|YIELDED` in the engine log) and no `YIELDED` line ever reached the
+  front door.  Filed as an upstream defect for the next bump, with the repro above; it is the difference
+  between "small chat waits 52 s" and "small chat waits one chunk".
+- **Arms that were neutral.**  `STRATA_ADMIT_SHORT_FIRST=32768` - as expected from its own docstring (it
+  orders *waiting* admissions; with one read in flight there is nothing to reorder): 78.3/64.7 s vs the
+  80.5/65.9 s control, inside box drift.  Shape 4/2 vs 4/4: 67.3/53.6 vs 65.3/51.6 at equal chunk - and 4/4
+  stays, because the 2026-11-21 sweep (runbook 337) measured agg wall +4~8 % for 4 groups of 1 on 4 cards;
+  only the stale comment claiming "4-card 4/2" was corrected.
+- **The lever that worked: the chunk the engine lends itself.**  `--prefill auto` sizes the chunk from what
+  every expert cache can lend *at boot*, and with the cold tier's pages in the cache that has been settling
+  one notch down per boot (asked 32768 -> got 16384 -> later boots auto picked 8192).  Asking for the ceiling
+  explicitly keeps the engine's own feasibility clamp (`prompt chunk 32768 -> 16384 tokens so its buffers fit
+  in every expert cache`) but drops the drift:
+
+  | shape | chunk (effective) | deep prompt | deep wall | small wall | cold prefill tok/s |
+  | --- | --- | --- | --- | --- | --- |
+  | 4/4 | auto -> 8192 | 242,498 | 83.7 s | 69.9 s | 2,900 |
+  | 4/2 | auto -> 8192 | 220,578 | 80.5 s | 65.9 s | 2,740 |
+  | 4/2 + short-first | auto -> 8192 | 220,809 | 78.3 s | 64.7 s | 2,820 |
+  | 4/4 | ask 32768 -> 16384 | 220,821 | **65.3 s** | **51.6 s** | **3,381** |
+  | 4/2 | ask 32768 -> 16384 | 220,591 | 67.3 s | 53.6 s | 3,278 |
+
+  Same protocol (`/tmp/contend3.py`, unique-prefixed prompts so nothing restores from the cold tier - the
+  first un-prefixed run measured the disk hit, not the prefill, and was discarded).
+- **Adopted.**  `export PREFILL_CHUNK=${PREFILL_CHUNK:-32768}` in `lane.env` / `lane.env.example` (launcher
+  already mapped it to `--prefill`): ~+16-23 % cold prefill throughput and ~-22 % on the stall it causes.
+  Chunk-class gate `bash ac922/eval/selfcheck.sh pf32k1` -> `SELFCHK pf32k1 ALL-EQ 3` (cold == cached at
+  8.5K/64K/131K), then `qualgate check lane4`.
+- **What this does NOT fix, stated plainly.**  Even at the best arm a small request behind a cold 220K prompt
+  waits ~52 s.  Cold PP is a pipeline-throughput ceiling (~2,100-3,400 tok/s on 4 cards, H.29), so neither
+  coalesce nor `replicas` raises it; replicas only gives each engine its own control lines.  In production the
+  real relief is the disk tier, which is working: a 212,769-token session restored in 1,803 ms (5.2 s total vs
+  84 s cold), 204 conversations / 511 GiB at budget, `waits for RAM 0 ms`.
+
 ### H.30 - the cache release that was always firing: sparse node ids, and what the two arms said (11-22 15:0x-23:0x, dev 2,5 + 4-card production)
 
 - **What this was.** Closing the tail of the `#267` incident: does `needs_drop` (937b4ac50) really gate

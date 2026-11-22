@@ -145,7 +145,8 @@ PY
   TS=$(date -u +%FT%TZ)
   LOG="$LOGD/strata-nvfp4-$TS.log"; echo "LOG=$LOG"; echo "GPUS=$CUDA_VISIBLE_DEVICES NB_CUT=$NB_CUT"
   # Rewrite the reference config onto this machine's layout (paths only; args untouched except the
-  # batch pair, which defaults to the accepted shape for the card count: 4-card 4/2, 6-card 6/3.
+  # batch pair, which defaults to the accepted shape for the card count: 4-card 4/4, 6-card 6/3 (the
+  # 4-card half of that is the 2026-11-21 sweep, runbook 337 - see the auto-shape block below).
   # STRATA_BATCH / STRATA_BATCH_GROUPS still override it explicitly for experiments.)
   python3.11 - "$BASE" "$RUN" "${STRATA_BATCH:-0}" "${STRATA_BATCH_GROUPS:-0}" "$SRC" "$MODEL_DIR" "$LOGD" <<'PY'
 import json,os,sys
