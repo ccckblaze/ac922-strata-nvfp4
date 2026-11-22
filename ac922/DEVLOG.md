@@ -694,6 +694,46 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.30 - the cache release that was always firing: sparse node ids, and what the two arms said (11-22 15:0x-23:0x, dev 2,5 + 4-card production)
+
+- **What this was.** Closing the tail of the `#267` incident: does `needs_drop` (937b4ac50) really gate
+  the release of the model files' cached pages, and what does not releasing them cost.
+- **The verdict.** Right logic, dead on this box.  Both walkers over `/sys/devices/system/node/nodeN/meminfo`
+  stopped at the first missing directory, and POWER numbers its memory nodes 0 and 8 (the six V100s sit on
+  memoryless 250-255).  So the free list held one entry: `free_before[nodes[1]]` read past the end, every
+  start looked tight, the release fired unconditionally - and `check_room` printed the fabricated
+  "node 8 has 0.00 GiB free".  The same walk silently disabled #1250's emptiest-node guard
+  (`numa_pin_free` returns the global number below two nodes).
+- **What was done** (4283c8d84).  Free memory now comes from `card_node_free_bytes` keyed by node number
+  (already tested for exactly this), nodes without CPUs are excluded, an unreadable node is said out loud
+  and judged conservative, and `STRATA_NUMA_DROP=auto|never|always` makes the release testable without a
+  rebuild.  Verified honest on both lanes: dev `free before: node 0 2.21 GiB, node 8 77.48 GiB`; production
+  (36.37 GiB complement) `node 0 6.46 GiB, node 8 98.46 GiB`, after the release `68.96 / 98.46`.
+- **What the host actually looks like at boot.**  ~33 of the ~36 GiB released on dev and ~62 of the
+  ~63 GiB released in production sat on node 0: the pack's page cache is almost entirely on one island
+  while the complement is split 50/50 by role.  That mismatch, not the release itself, is the root cause
+  of the crash chain - release destroys the cache the mmap fallback reads from, deep concurrency then
+  re-reads 52.7 GB for one request at ~12x, and the host wait rides GPU verify work past the 5 s watchdog.
+- **Arm B (`never`, dev, same shape).**  The page-lock completed anyway - "resident 16.00 GiB, pinned
+  16.00 GiB in 5 s", no early stop, no OOM - but placement collapsed: `slice 0 has 0.1 % of its pages on
+  node 0` (31 of 33054 sampled; the rest came from node 8's 77 GiB).  So the release is not only the OOM
+  guard #1250 documented, it is what makes the even slice split possible at all.  `auto` stays shipped.
+- **Why the 95 % gate still fails after a release.**  In production node 0 had 68.96 GiB free right after
+  the release and slice 0 still ended 93.7 % local (4723 sampled pages, ~1.2 GiB, on node 8; slice 1
+  mirrored it at 93.0 %).  "The node was full at the fault" is therefore not the story.  Two candidates:
+  the released ~62 GiB refilling from continued pack reads during the 11 s of stepped page-locking, and
+  `kernel.numa_balancing=1` migrating arena pages toward whoever reads them next (the placement's own
+  comment forbids the caller from re-touching slice pages for exactly that reason).  Turning balancing off
+  is a host-wide change touching the other tenants: operator's call, not ours.
+- **`MADV_NOHUGEPAGE` errno 22, priced.**  Isolated probe: the same advice fails on a `posix_memalign`
+  region and succeeds on a raw anonymous `mmap` of identical size.  This host runs THP=`[madvise]` with
+  AnonHugePages 0 globally and in the engine's own rollup, so the arena takes 4 KiB pages regardless and
+  the line is noise here.  On a THP=always host the failed call would silently lose the guarantee.
+- **Production state.**  The 23:0x boot runs the fixed binary (complement 36.35 GiB pinned, slices
+  18.34/18.02), GEOMETRY-PASS, `qualgate check lane4` → **QUALGATE-PASS**, acc-drift 1.0, zero verify
+  timeouts; the crashed-era boot archived first.  The gate's warn list grew `131000/8,512,128` next to the
+  known `64000/8,512` relay-cell-drift - same T1 chunk-invariance account, deeper windows.
+
 ### H.29 - the NUMA patch placed, the rotation un-exclusive itself, and the POWER9 build passed the yardstick at KL 0 (11-22 10:5x-14:3x, dev 2,5 + dual engines)
 
 - **What this was.** First execution pass on the H.28 tooling: prove the raw-pack NUMA patch on
@@ -1410,3 +1450,11 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     agreed with the *other arm*.  Before any cross-boot A/B, re-run the probe on the *unchanged* thing
     across two boots; for suspected-numerics changes, score against a yardstick that pins residency
     (quant_quality: expert-cache 1, adaptation off) instead of a traffic-shaped probe.
+22. A build that exits 0 is not a build that contains the change.  Reconfiguring with a variable that
+    expanded empty set `CMAKE_CXX_COMPILER=/bin/c++` (gcc 8.5), after which the `strata_core`/`strata`
+    targets had vanished from the tree: the incremental build and the full build both reported success
+    (nothing left to do, 100 %) while `build/strata` kept its old mtime and its old code.  Gate the
+    artifact, never the exit code: `strings build/strata | grep -c <a literal only the new code emits>`,
+    and compare the binary's mtime against the source you changed.  A degraded configure is repaired by a
+    fresh configure into a new directory, then swapping the directories (lesson 20's practice) - not by
+    reconfiguring the poisoned one.
