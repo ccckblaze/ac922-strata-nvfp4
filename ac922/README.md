@@ -40,6 +40,12 @@ bumped since (`PERFORMANCE.md` §7); on the shipping binary the full-window row 
 re-proved.  Re-laddering the cold-pp and single-stream-tg cells on the shipping engine is booked as
 open debt, not forgotten.
 
+The parking floor (2026-11-22) was re-corroborated on the 6-card reference lane the same morning:
+neutral there by construction (six conversations fit six batch slots, so the gate is never consulted),
+and the lane's cold-boot `held_edge` flakes were measured against an order-matched control and are
+**not floor-caused** - they are deep-edge EOS sampling under chunked-prefill-split changes, booked
+with the split-invariance debt (`PERFORMANCE.md` §10d).
+
 **Ship invariant — 满窗是前提.**  The window is never the thing that gives: if a change cannot hold
 4 concurrent byte-exact full-window streams on the shipped 4-card lane, the ship shape drops to
 **3 concurrent full-window streams**, not to a shorter window.  `eval/fullwindow.py` is the arbiter

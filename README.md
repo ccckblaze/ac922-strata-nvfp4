@@ -49,7 +49,9 @@ short-window cell and its TTFT row moved with the 2026-11-22 parking-floor adopt
 now reports it as `held_edge`, because the old condition — `completion == max_tokens` at
 `prompt+gen == total` — cannot be met at a byte-exact edge.  Single-run cells are marked `n=1` in
 `PERFORMANCE.md` §6e.  The 6-card column is the reference lane,
-measured before that rebalance and still carrying its VRAM-headroom risk.
+measured before that rebalance and still carrying its VRAM-headroom risk; its cold-boot deep-edge
+`held_edge` flakes (capacity fine, EOS sampled early at the last token of the window) are documented
+with the parking-floor corroboration in `PERFORMANCE.md` §10d.
 
 Accuracy, full suites, errors = 0, budget audit clean: **GSM8K 97.12%** (1,319) · **MATH500 89.40%** (500) · **HumanEval 96.95%** (164)
 

@@ -694,6 +694,39 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.27 - the 6-card corroboration came back neutral, and its one surprise was an artifact of our own ordering (11-22 08:0x-09:2x, 6 cards, then handback)
+
+- **What was asked.** Re-prove the adopted `CC_MIN_TOKENS=4096` on the 6-card lane (the flag lives in
+  the shared `lane.env`, so the ship decision silently speaks for that geometry too), then migrate back
+  and re-verify 4-card production.  Driver: `/root/ship6c.sh <floor> <tag> <full|short>` - one place
+  that edits the floor, boots through `lane.sh`, proves the shape from `/proc/<pid>/cmdline`, and prices
+  the bands; arms chained server-side with `setsid` waiters so a ten-minute WAN dropout (09:12-09:22,
+  mid-control) cost nothing but patience.
+- **Why 6 cards never paid the tax.** Six conversations fit six batch slots, so nothing is evicted
+  between turns and the park gate is never consulted: 8K x 6 at the OLD 32768 floor read 227.2/237.4 at
+  99.9 % reuse, indistinguishable from 4096 (163.1/232.0, the first rep still carrying a cold-wave
+  prefill) and from the ungated 11-19 history (240-254).  The tax needed n = slots with fixture
+  contention, which is the 4-card lane's daily life.  Adoption verdict for 6-card: **neutral, keep**
+  (245K band unchanged, `PARKPRESSURE-PASS` with resurrect 2.11/2.21 s, COLD = 0).
+- **The surprise, and the arm that defused it.** 6-card `fullwindow` at 4096 failed `held_edge` 4/6 -
+  the two last-decoded streams emitted end-of-text 8 and 56 tokens short of the 262,136 edge at
+  `temperature=0` with byte-identical payloads.  The instinct was to blame the new floor; the honest
+  first control (32768, run *after* a battery of probes) passed 6/6, which would have "confirmed" it -
+  and would have been the ordering talking, not the floor.  The order-matched control (32768 booted
+  fresh, fullwindow as the FIRST requests) failed the same way: **5/6, same stream**.  So: cold-boot
+  conversation-cache state moves the chunked-prefill split, and the split flips EOS at the extreme edge;
+  warm repeats hold 6/6.  Not a capacity failure (prompt side exact 6/6 in every read, no OOM, no
+  dropped stream), not ship-blocking (the invariant is graded on 4-card, which has never shown it in
+  any read), but now a named piece of debt tied to the T1 split-invariance question (§10d, §10
+  PP-ladder note).
+- **Handback proof (4 cards, floor 4096).** `GEOMETRY-PASS 4 cards, 4 groups of 1`; `fullwindow 4/4
+  held_edge`; 8K x 4 128.9 @ 99.9 % reuse; `turnprobe` follow 0.26-0.31 s at 98.5-99.9 %; `lanecheck`
+  13 ok / 3 warn - one warn is the new 59-token probe correctly not parking below the floor, which is
+  the gate working as designed and the short-band checker discriminating for real.
+- **Standing lesson this re-teaches (18 again, from the other side).** A control that answers "is it
+  X?" must match the *ordering context* of the failure, not just the flag under test; a green control
+  run in a different position in the boot is decoration.  Tables: `PERFORMANCE.md` §10d; runbook §346.
+
 ### H.26 - a same-boot anchor meant to decorate a table found a 2x short-window tax, and the gate that let it hide for two days (11-22 07:0x-08:0x, 4 cards)
 
 - **How it surfaced.** H.25 left one optional item: give the ship table a same-night 4-card aggregate

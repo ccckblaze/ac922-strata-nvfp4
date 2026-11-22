@@ -690,6 +690,39 @@ reads carry their own spread (§9f lesson).  `turnprobe` 2K-64K: cold 4.15-19.3 
 98.5-100 % reuse across every depth, including the two below the floor (see the boundary note in §10
 point 2).
 
+### 10d. The 6-card corroboration: the floor is neutral there, and a cold-edge flake it handed us (2026-11-22 morning)
+
+The floor lives in the shared `lane.env`, so the question was whether adopting it helped, hurt, or did
+nothing on the 6-card reference geometry (`3 groups of 2`, batch slots = conversations).  Four boots,
+paired:
+
+| arm (all `.4` tree, 6 cards) | 8K x 6 sum_tg | 245K x 6 | parkpressure | fullwindow 6 x 262,136 |
+| --- | ---: | ---: | --- | --- |
+| **4096** (boot 124323, full battery) | 163.1 / 232.0 @ reused 99.9 % | 125.0 / 103.5 @ reused 100 % | **PASS** - resurrect 2.11 / 2.21 s, COLD = 0 | FAIL 4/6 held_edge (see below); ptok exact 6/6 |
+| **32768** control (boot 136096, short band) | 227.2 / 237.4 @ reused 99.9 % | - | - | 6/6 (warm CC, ran after the probes) |
+| **4096** repeat (boot 139694) | - | - | - | cold **4/6** (streams 5,6 emit EOS early); warm re-run same boot **6/6** |
+| **32768** order-matched (boot 141826, fullwindow first after boot) | - | - | - | cold **5/6** (stream 5 EOS early) |
+
+Two conclusions, one per column group.
+
+1. **The floor change is 6-card-neutral, and the asymmetry is explained.**  8K x 6 never paid the tax
+   even at 32768 (99.9 % reuse, 227-237 aggregate, matching the ungated 11-19 history 240-254): six
+   conversations fit the six batch slots, so nothing is evicted between turns and the park gate is
+   never consulted.  The 4-card lane taxed at n = slots, where fixtures and traffic contend and turn-2
+   arrives post-eviction.  Adoption therefore *extends* no 6-card win and *costs* nothing: 245K band
+   unchanged, deep chains unstarved (`PARKPRESSURE-PASS`), VRAM/RAM shapes clean
+   (23.53 GiB resident experts, 127-149 GiB MemAvailable).
+2. **A new named flake: cold-boot deep-edge early EOS.**  With `temperature = 0` and byte-identical
+   payloads, the *last-decoded* streams at the 262,136 edge emitted end-of-text 8-56 tokens short in
+   three cold-CC boots (4/6, 4/6, 5/6) and never in warm repeats (6/6 x 2) nor on 4-card (4/4 across
+   every §9f/§10 read).  It is **not** floor-caused - the 32768 order-matched control fails the same
+   way - it tracks the boot-cold conversation-cache state, i.e. the same chunked-prefill-split
+   sensitivity that §10's PP-ladder note and the T1 `--prefill-pipe` debt already circle.  Window
+   capacity is not implicated (prompt side was exact 6/6 every time, `finish=length` on all survivors,
+   no OOM, no dropped stream).  Booked: re-check on the next `-nvfp4` tag with T1's split-invariance
+   fix as the paired question; if it survives there, it becomes its own investigation, not a ship
+   blocker (the ship invariant is graded on the 4-card lane, which has never shown it).
+
 Two honest notes:
 
 - A cold turn is not free even at 8 K (1,132 tok/s here against the 2,075 tok/s §6e.1 ladder point),

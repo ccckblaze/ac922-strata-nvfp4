@@ -706,6 +706,13 @@ future claim for this knob must first name a shape that reaches 33 792 blocks.
   same above ~2K (follow-up TTFT 0.38-0.50 s at 2,061-20,061 tokens), but `0` lets a one-shot 200-token
   request occupy one of the 32 slots.  4096 keeps the protection the flag exists for while covering every
   real chat/agent turn.
+- **6-card corroboration (same morning).** The flag is in the shared env, so the 6-card reference lane
+  was booted under both floors: **neutral** there by construction - six conversations fit six batch
+  slots, nothing evicts, and the gate is never consulted (8K x 6 at 32768 reads 227.2/237.4 at 99.9 %
+  reuse, at parity with 4096 and with the ungated 11-19 history; 245K band and `PARKPRESSURE` unchanged).
+  Its one oddity - cold-boot `fullwindow` held_edge flakes (4/6 at 4096, 5/6 at a 32768 order-matched
+  control; warm repeats 6/6) - was measured to be *not floor-caused*; it is a chunked-prefill-split
+  sensitivity at the window edge, booked with the T1 debt.  Tables: `PERFORMANCE.md` §10d.
 - **Process note (the part worth keeping).** This regressed for two days invisibly because every gate run
   after the 11-20 adoption measured the deep band: resurrection, full window, 131K/245K aggregates, det,
   acc-drift.  Nothing looked at a *second turn* of a *short* conversation.  `scripts/lanecheck.sh` now
