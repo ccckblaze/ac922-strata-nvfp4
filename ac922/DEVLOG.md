@@ -694,6 +694,90 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.29 - the NUMA patch placed, the rotation un-exclusive itself, and the POWER9 build passed the yardstick at KL 0 (11-22 10:5x-14:3x, dev 2,5 + dual engines)
+
+- **What this was.** First execution pass on the H.28 tooling: prove the raw-pack NUMA patch on
+  hardware, price the power9 codegen, and re-read two Wave-G tickets against what the engine actually
+  does on a layer split.  (`c71ef528b` fixed the first execution attempt: the devlane straddle branch
+  left `NA=STRADDLE` and `setsid` tried to execute the marker - dev 2,5 died executing the word
+  STRADDLE.)
+- **The patch places.** On the 2,5 dev boot, the old `NUMA placement FAILED: this pack has no
+  per-role byte sizes` is replaced by real slices - `slice 0 -> node 0 (8.07 GiB, toucher CPU 4),
+  slice 1 -> node 8 (7.93 GiB, toucher CPU 88)` - and when the co-running ship lane squeezed node 8
+  dry, the sentinel said so honestly (`WARNING: NUMA placement at risk: node 8 has 0.00 GiB free`,
+  then a partial-placement FAILED at 62.7 %).  The shipping 4-card lane still runs bump-src and still
+  prints the old FAILED line: the pack fix is one of the two reasons the lane should move onto the
+  repo binary (power9 being the other).
+- **Rotation semantics, corrected by the engine's own words.** The hpp comment about rotate and
+  "fixed slots" is about the **CPU pool** split, and the engine says exactly which thing it turns
+  off: `strata cpu pool: NUMA pool off: STRATA_EXCHANGE_ROTATE=1 moves experts between slots, the
+  split needs fixed slots` - while complement placement and the rotation coexist happily (rotation
+  requires the complement pinned: `exchange buffer rotation enabled: 96 buffers`).  So placement x
+  rotate is a three-arm design (placement+pool / rotate+no-pool / both-off), not the two-arm A/B the
+  plan priced.  Rotate's win is the last host commit memcpy in exchange-heavy regimes; at the 73 K
+  dev floor its absence was already `host 0.06-0.10 ms/window`, so no floor effect was expected or seen.
+- **ADAPT_FETCH dies structurally, not by measurement.** Both lanes print `STRATA_ADAPT_FETCH is off
+  (a layer split)` at boot: on any layer-split engine - all shipping shapes - the upstream author's
+  `+10.2 %` fetch mode is not the thing running, and no env value will make it so.  The ticket moves
+  from "wave candidate" to "wrong topology for our lane", priced for non-split boxes only.
+- **Pool affinity was already shipped.** The production log shows `cpu pool: NUMA split on: slice 0 =
+  node 0 (17 threads), slice 1 = node 8 (16 threads)` - the thread half of the old T10 question is
+  default-on; what was missing was the arena half, which is the patch above.
+- **The power9 gate.** Same tree, two builds (`build` with the module at auto, `build-p8ref` with
+  `STRATA_PPC_CPU=none` - the module's off-switch proven by its own status line), scored through the
+  quant-quality yardstick in CPU-experts mode (the very surface power9 tuning touches): 4995 teacher-forced
+  positions, **top-1 agreement 100.00 %, mean KL 0.00000, p99 KL 0.0000, PPL 3.937 vs 3.937**.  The
+  codegen is numerically indistinguishable, which is stronger than the "expected bitwise" assumption -
+  and stronger than what divprobe could have said: the same p9 binary, two boots, gave different
+  divprobe hashes at 110 K (L=8/128/512; one of them equal to the p8 arm's), because adaptive residency
+  sets drift between boots and deep-window greedy cascades amplify a near-tie.  Lesson 21.
+- **Dev tg readings are a floor, not a verdict.** Three arms' best windows sat within 2 ms/window
+  (placement 21.97-23.08, rotate 21.81-25.11, p8ref 23.49) - inside the same-boot ruler, and the
+  dev lane barely exercises host-resident experts, the surface power9 prices.  The real reading is
+  the ship lane's own DECODE_TIMING cpu column, boot over boot: switch the lane onto the repo binary,
+  re-anchor REF, and let the ledger say whether the 10.5-17.5 ms/window host-expert ledger shrank.
+
+### H.28 - the lane moved islands, the NUMA shim found its pack bug, and the build was silently compiling at the POWER8 floor (11-22 09:xx-11:0x, 4 cards ship + rebuild)
+
+- **What this was.** Three related changes in one pass, all aimed at the memory side of the deep-window
+  ledger: the card-set reshape (0,1,3,4 - two cards per island - per the user's consistency call), the
+  NUMA placement patch, and the POWER-generation build flags.  (`66614dba9`, `1f62fbc6d`, `4a3fbfd6b`,
+  `f469a043c`)
+- **Lane reshape.** `lane.sh`/run.sh default to 0,1,3,4 now and `NB_CUT` derives itself from the sysfs
+  numa_node of the chosen cards (topo -m fallback; probe failure keeps the old literal).  The dev lane
+  took the leftovers 2,5 - one card per island - and when it spans islands it *mirrors* the production
+  straddle (numabind.so + NB_CUT fraction) instead of pinning to one node, so dev arms price the same
+  remote-read behaviour the ship lane pays for.
+- **The pack bug.** NUMA placement warned "this pack has no per-role byte sizes" - true for raw-blob
+  packs: the reader never saw role sizes because there is no GGUF metadata on experts.bin.  The patch
+  synthesizes an even three-way split for raw packs before `numa.init`, which is exactly what the
+  complement wants (q/k/v roles are equal-sized by construction here) and leaves the role-pointer path
+  untouched.  Dev-lane boot on 2,5 is the feasibility proof; the old WARN must become a
+  `FileExpertSource: NUMA placement:` line.
+- **The POWER8 floor, confirmed.** `grep` of both live build caches: every target in the tree compiles
+  with no `-mcpu` at all, so RHEL gcc-toolset-12's baked default governs - and that default is
+  `-mcpu=power8 -mtune=power8` (visible in every cc1plus cmdline).  ggml-cpu already lifts itself with
+  its own power9 branch (`-mcpu=power9`, and the `-U__POWER9_VECTOR__` tail guards only AC922's
+  deliberately-scalar `arch/powerpc/quants.c` shim, not the engine).  What never got power9 codegen was
+  the engine host code itself: orchestration, exchange, quantizers - the CPU half of every decode
+  window.  `cmake/strata_ppc_cpu.cmake` now auto-detects the generation (`cpu : POWER9` line, pvr
+  004e/004d; POWER10 MMA is never reached), probes the compiler's default arch macro so a toolchain that
+  already defaults correctly adds nothing, verifies each flag with check_cxx_compiler_flag, and applies
+  the delta to CXX/C plus nvcc host passes (-Xcompiler).  x86/ARM builds are untouched;
+  `STRATA_PPC_CPU=none` opts out.
+- **Codegen is a numerics-adjacent change.** No -ffast-math, no reassociation, so bit-identity is
+  *expected* - but expected is not verified: the power9 binary goes through the standing quality gate
+  (det x3 + quant_quality + divprobe) against the shipping reference before anything adopts it.
+- **The stale fingerprint.** After the hard-reset the repo build failed to link `q80p_*`: the
+  `build/` configure was from Nov 17, the DFLASH2-era sources (q80_vhead.cu) postdated it, and gmake
+  happily compiled what the old target lists knew about and linked what they did not.  A full reconfigure
+  (with the new module active) is the fix; see standing lesson 20.  (The same configure later also showed
+  the directory had been moved: the cache reported it was born in `build-new`, which is why reusing that
+  directory for a fresh configure fails outright.)
+- **Tooling.** `ac922/scripts/abreq.py`: the same-boot two-arm harness - strata_tune request keys
+  (pcie_frac/spec_min_p/prefill_pipe/aux_cpus), paired alternating rounds, sign test p<0.05, and the
+  sub-4 ms/window ruler encoded as a verdict, not a comment.  It is the precondition for T1/T2/T9.
+
 ### H.27 - the 6-card corroboration came back neutral, and its one surprise was an artifact of our own ordering (11-22 08:0x-09:2x, 6 cards, then handback)
 
 - **What was asked.** Re-prove the adopted `CC_MIN_TOKENS=4096` on the 6-card lane (the flag lives in
