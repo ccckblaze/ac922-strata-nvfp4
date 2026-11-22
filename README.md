@@ -22,7 +22,7 @@
 full-window streams** — it does not drop the window.  `eval/fullwindow.py` is the tool that decides,
 and it reports byte-exact `prompt_tokens + completion == 262,144`, never "98.7% of the window".
 
-![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v5-2026-11-17.png)
+![AC922 panorama — performance, context, resources, accuracy](ac922/results/charts/ac922-samelen-v6-2026-11-22.png)
 
 ## The numbers (all measured on this box)
 
