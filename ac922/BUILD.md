@@ -108,3 +108,16 @@ shipping `build-vision` is configured with. Re-verified 2026-11-17.
 `-mcpu=power9` is picked automatically by ggml's native detection on this box (it implies VSX —
 an explicit `-mvsx` is redundant, and do not expect POWER10/11 paths: this compiler's autovectorizer
 targets ISA 2.07 + P9 scheduling).
+
+Since `1f62fbc6d` this no longer covers only ggml: **`cmake/strata_ppc_cpu.cmake` lifts the whole
+build to the machine's POWER generation.**  RHEL's gcc-toolset-12 bakes `-mcpu=power8 -mtune=power8`
+into the compiler itself, and the engine targets (the CPU half of every decode window: orchestration,
+exchange, quantizers) carried no `-mcpu` at all, so they silently compiled at the POWER8 floor.  The
+module - `STRATA_PPC_CPU=auto|power8|power9|none`, default auto - reads the generation from
+`/proc/cpuinfo` (`cpu : POWER9` / pvr 004e), probes whether the compiler default already defines
+`_ARCH_PWR9` (a toolchain that is already correct adds nothing), verifies each flag with
+check_cxx_compiler_flag, and applies `-mcpu/-mtune` to CXX, C and the nvcc host pass (`-Xcompiler`).
+It is a no-op off ppc64le and never reaches past what the hardware proves (no POWER10 MMA).
+Codegen changes still go through the quality gate (det x3 + quant_quality + divprobe) before adoption,
+and after a workspace reset the build directory must be reconfigured, not just recompiled - the
+November link failure (`q80p_*` undefined after a hard-reset) is standing lesson 20 in `DEVLOG.md`.
