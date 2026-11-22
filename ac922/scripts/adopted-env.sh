@@ -25,3 +25,14 @@ export STRATA_BATCH_SELF_COMMIT=${STRATA_BATCH_SELF_COMMIT:-0}
 # traffic into the fast lane; 0 turns the policy off (upstream default).
 export STRATA_ADMIT_SHORT_FIRST=${STRATA_ADMIT_SHORT_FIRST:-8192}
 # <<< AC922 adopted env <<<
+# >>> AC922 adopted env (DECISIONS.md: prefill chunk ceiling) >>>
+# `--prefill auto` sizes the chunk from what every expert cache can lend at boot, and with the cold
+# tier's pages resident that has been settling one notch down per boot (32768 -> 16384 -> 8192), which
+# costs cold prefill ~20% and lengthens the stall every other request pays behind a long read.
+# Asking for the ceiling does not override the engine's safety: it still clamps to what fits and says so
+# ("prompt chunk 32768 -> 16384 tokens so its buffers fit in every expert cache").
+# Measured 2026-11-23 (DEVLOG H.31, 4 cards, ~220K cold prompt + a 64-token prompt 12 s behind it):
+#   auto -> 8192: deep 80.5 s, small 65.9 s   |   ask 32768 -> 16384: deep 65.3 s, small 51.6 s
+# Chunk-class gate: selfcheck.sh pf32k1 => ALL-EQ 3 (cold == cached at 8.5K/64K/131K).
+export PREFILL_CHUNK=${PREFILL_CHUNK:-32768}
+# <<< AC922 adopted env <<<

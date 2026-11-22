@@ -718,3 +718,35 @@ future claim for this knob must first name a shape that reaches 33 792 blocks.
   acc-drift.  Nothing looked at a *second turn* of a *short* conversation.  `scripts/lanecheck.sh` now
   grades short-band and deep-band turn reuse from the engine's own completion lines on every hand-back,
   with WARN at <50 % short reuse.
+## Adopted: `PREFILL_CHUNK=32768` - `--prefill auto` had been drifting the chunk down boot to boot (2026-11-23, 4 cards)
+
+**Symptom.**  The operator saw single requests at 0.8-1.3 tok/s and moved traffic off the lane.  Nothing was
+wrong with compute, VRAM or placement: a cold ~220K prompt read holds the control lines (one prompt read at a
+time) for its whole duration, and a 64-token request sent 12 s behind it waits 52-74 s, then decodes normally
+(`BGEN` slot, 47.1 tok/s).  `serve` reports tokens/total-elapsed, so the wait shows up as slowness.
+
+**The knob that helped.**  `--prefill auto` picks the chunk from what every expert cache can lend *at boot*;
+with the cold tier's pages in the page cache it had settled 32768 -> 16384 -> 8192 across boots.  Setting
+`PREFILL_CHUNK=32768` asks for the ceiling and lets the engine clamp it to what actually fits, so the clamp is
+a feasibility decision rather than a memory-pressure accident.
+
+| shape | chunk (effective) | deep prompt | deep wall | small wall | cold prefill tok/s |
+| --- | --- | --- | --- | --- | --- |
+| 4/4 | auto -> 8192 | 242,498 | 83.7 s | 69.9 s | 2,900 |
+| 4/2 | auto -> 8192 | 220,578 | 80.5 s | 65.9 s | 2,740 |
+| 4/4 | ask 32768 -> 16384 | 220,821 | **65.3 s** | **51.6 s** | **3,381** |
+| 4/2 | ask 32768 -> 16384 | 220,591 | 67.3 s | 53.6 s | 3,278 |
+
+**Not changed by this decision.**  The 4-card ship shape stays `--batch 4 --batch-groups 4` (the 2026-11-21
+sweep above); 4/2 measured equal-or-worse here and its agg wall is 4-8 % behind.  `STRATA_ADMIT_SHORT_FIRST`
+stays adopted at 8192 (its 11-20 win needs 2+ *waiting* admissions; a single read in flight leaves it nothing
+to reorder, which is exactly what these probes showed).
+
+**Gates.**  Chunk-class `selfcheck.sh pf32k1` => `ALL-EQ 3` (cold == cached at 8.5K/64K/131K);
+`qualgate.sh check lane4` against the existing REF (numeric path unchanged).
+
+**Open, filed upstream.**  Ticket #656's `BYIELD` (a long read giving way at a chunk boundary to a much
+shorter waiting one) never fired on this build: 0 engine-side `BYIELD`/`YIELDED` lines over 6 boots and 8
+paired probes.  That is the difference between a 52 s wait and a one-chunk wait, and it is why `replicas`
+isolation still matters for mixed traffic even though it cannot raise cold-PP throughput.
+
