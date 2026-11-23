@@ -694,6 +694,49 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.34 - the operator's slow stretch, attributed: the pathological window is 87 % host CPU, not reach and not bandwidth (11-23 10:0x-10:4x, 4-card production, read-only)
+
+- **What was asked.**  After H.33 the question was whether the wall is NUMA cross-socket transfer or memory
+  bandwidth.  The operator then ran a stretch of real traffic and said it was still very slow, so this entry
+  answers with the engine's own decomposition instead of a mechanism story.
+- **The traffic** (this boot's request table, 26 requests; the operator's own are the deep ones):
+
+| ptok | reused % | prefill ms | tok/s (PP) | gen ms | decode tok/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 137,102 | 13.1 | 72,749 | 1,639 | 567 | 1.8 |
+| 125,384 | 15.3 | 47,652 | 2,230 | 39 | 25.7 |
+| 151,638 | 0.0 | 94,375 | 1,606 | 28 | 35.3 |
+| 197,483 | 9.1 | 86,459 | 2,070 | 22 | 46.0 |
+| 125,633 / 137,530 / 137,739 | ~100 | 4,756 / 8,414 / 7,552 | - | 20-23 | ~50 |
+
+  Steady-state from H.33's own census on the same boot family: a cold 131K prefill in 38.2 s = **3,435 tok/s**.
+  His four cold reads ran at 1,606-2,230 - **40-53 % slower than the same machine's silent baseline** - and the
+  three ~100 %-reused turns cost 4.8-8.4 s where the restore path is documented at ~2 s.  So this is a PP and
+  restore-time problem under concurrency, and the short `decode tok/s` column is an artifact of 20-567 ms
+  generations, not a decode measurement.
+- **Where the time goes when it is slow** (`/data/work/decodetiming/rows-202611.jsonl`, last 2 h, `windows` = rows in the
+  window): ordinary windows are `mswin 19.7 / verify 19.2 (97 %) / gpu_reach 3.24 (16 %, overlapping) / cpu 0.15`.
+  The pathological ones (deep prefill running while a session decodes) are `mswin 315-567 ms` with
+  **`cpu` 274-501 ms = 87-92 % of the window** and `gpu_reach` 6.9-10.6 ms = 2 %.  The hand-off/reach machinery is
+  not what collapses; the host-CPU segment is.
+- **So, the direct answer.**  Not memory bandwidth as the primary wall, and not NUMA reach: the reach segment caps
+  the NUMA ticket's value at ~16 % of an ordinary decode window (and part of that is NVLink, which no placement can
+  remove).  The weighted block-aligned slice stays a first-tier ticket but must be priced against *that* segment,
+  plus whatever it saves on the prefill feeder - which is not yet measured here.  H.33's own conclusion stands:
+  the feeder is the shared upstream, and what saturates it in this sample is the host-CPU side of concurrent deep
+  prefill.
+- **Two real co-suspects, both measurable and neither needing a kernel.**  (1) The boot's first request paid
+  `OS read 127,954.9 MB from storage (5,390 major faults) for 44,629.7 MB of expert reads; page cache held
+  264.7 MB ... not 66,267.8 MB` - a cold start pulls ~125 GiB from NVMe, and `lsblk` shows the pack and the 512 GiB
+  conversation-disk tier on the *same* device (`nvme0n1`, `/data` 79 % used), so warm-up, restore and idle saves all
+  contend on one drive.  (2) VRAM headroom is ~32 MiB, and this boot logged 285 `no VRAM for a new window graph:
+  freed the graphs ... (a larger --vram-reserve-mib keeps more)` events (the 6.5 h morning boot logged 578) - each
+  forces a re-capture of a batch window layout.
+- **Not done, on purpose.**  No configuration was touched and no restart was issued while the operator was live
+  (lesson 23).  The attribution experiment queued for a quiet window: N decode streams + one deep cold prefill,
+  same-boot paired, arms = shipped `--aux-cpus auto` vs a reduced CPU share, judging the `cpu` segment per window
+  before touching GPU-side knobs.
+
 ### H.33 - the per-card work census: what "one card pinned, three watching" is, and a rebalance that bought nothing (11-23 09:1x-09:5x, 4-card)
 
 - **What this was.**  The operator watched `GPU1` at 91 % SM load with the other three at 5-10 % and asked whether the
