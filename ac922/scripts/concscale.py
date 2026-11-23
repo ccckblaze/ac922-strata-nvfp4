@@ -84,7 +84,10 @@ def corpus_text(corpus, n_chars, salt, pool):
     """Both arms are sized in CHARACTERS so a target token count maps to each the same way."""
     if corpus == "prose":
         return prose_text(n_chars, salt, pool)
-    return uniq_text(max(1, int(n_chars / 6.0)), salt)
+    # Generate over a word count derived from the target, then cut to exactly n_chars: the calibration
+    # probe measured this generator in characters per token, so sizing by words-then-join overshoots
+    # (a 131 K target came back as 157 K) and the arms would not be at equal depth.
+    return (" ".join(uniq_text(max(1, int(n_chars / 6.0)), salt)))[:n_chars]
 
 
 def probe_tokens_per_char(url, text):
