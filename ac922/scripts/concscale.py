@@ -287,35 +287,86 @@ def med(vals):
 
 
 def cpu_snapshot():
-    """(busy_jiffies_all_cpus, our_jiffies) - the pair that lets a cell say how much of the machine
-    someone else was using while it ran.  The 4-card lane is no longer measurable in a vacuum: the
-    operator's NNLC job array (`xargs -P 6 ... julia`) runs beside production for hours, and it moves
-    the window time by itself, so every cell records its own foreign load instead of trusting the clock."""
+    """The machine state a cell ran in, split into the three things that actually move window time.
+
+    Measured 2026-11-23: the first version called everything outside `strata-*` foreign, which counted our
+    own GPU driver's kthreads (UVM bottom halves, nvidia workqueues) and the kworkers doing the conversation
+    disk writes as if a co-tenant had eaten them - a quiet lane then reported 16 foreign cores.  Kernel
+    threads are separated by the empty cmdline they carry.  The field that mattered most was not CPU at
+    all: with the NNLC array finished and load 0.00, single-stream deep tg was still 29.5 against the 53.1
+    quiet anchor, because the expert file's page cache had been reclaimed - hence cached, pgmajfault and the
+    two nodes' free RAM are recorded per cell.
+    """
     with open("/proc/stat") as f:
-        c = f.readline().split()
+        stat = f.read()
+    c = stat.splitlines()[0].split()
     busy = sum(int(x) for x in (c[1], c[2], c[3], c[6], c[7], c[8]))
-    ours = 0
+    majflt = 0
+    for line in stat.splitlines():
+        if line.startswith("pgmajfault"):
+            majflt = int(line.split()[1])
+            break
+    ours = other = kern = 0
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
         try:
-            with open("/proc/%s/comm" % pid) as f:
-                comm = f.read().strip()
-            if not comm.startswith("strata"):
-                continue
+            if os.path.getsize("/proc/%s/cmdline" % pid) == 0:
+                kcls = True                      # a kernel thread: driver, kworker, migration
+            else:
+                kcls = False
             with open("/proc/%s/stat" % pid) as f:
-                st_ = f.read().rsplit(")", 1)[1].split()
-            ours += int(st_[11]) + int(st_[12])      # utime + stime (fields 14 and 15)
+                tail = f.read().rsplit(")", 1)[1].split()
+            j = int(tail[11]) + int(tail[12])    # utime + stime, all of the process's threads
         except Exception:
             continue
+        if kcls:
+            kern += j
+            continue
+        try:
+            with open("/proc/%s/comm" % pid) as f:
+                comm = f.read().strip()
+        except Exception:
+            continue
+        if comm.startswith("strata"):
+            ours += j
+        else:
+            other += j
+    mem = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            k = line.split()[0].rstrip(":")
+            if k in ("MemFree", "MemAvailable", "Cached", "Buffers", "SwapCached"):
+                mem[k] = int(line.split()[1])
+    nfree = {}
+    for n in (0, 8):
+        try:
+            with open("/sys/devices/system/node/node%d/meminfo" % n) as f:
+                for line in f:
+                    if "MemFree" in line:
+                        nfree[n] = int(line.split()[3])
+                        break
+        except Exception:
+            pass
     with open("/proc/loadavg") as f:
         l1 = float(f.read().split()[0])
-    return busy, ours, l1
+    return {"busy": busy, "ours": ours, "other": other, "kern": kern, "majflt": majflt,
+            "cached_mib": mem.get("Cached", 0) + mem.get("Buffers", 0), "nfree": nfree, "load1": l1}
 
 
-def foreign_cores(t0, t1, dur):
-    """CPU cores consumed by everything that is not our own strata process tree during the interval."""
-    return round(max(0.0, (t1[0] - t0[0] - (t1[1] - t0[1])) / 100.0 / max(0.001, dur)), 2)
+def cell_covariates(t0, t1, dur):
+    """Per-cell machine context in physical units: cores, major faults/s, page cache, node free."""
+    g = lambda a, b: max(0, b - a)
+    return {
+        "ours_cores": round(g(t0["ours"], t1["ours"]) / 100.0 / dur, 2),
+        "foreign_cores": round(g(t0["other"], t1["other"]) / 100.0 / dur, 2),
+        "kern_cores": round(g(t0["kern"], t1["kern"]) / 100.0 / dur, 2),
+        "majflt_s": round(g(t0["majflt"], t1["majflt"]) / dur, 1),
+        "cached_gib": round(t1["cached_mib"] / 1048576.0, 1),
+        "node0_free_gib": round(t1["nfree"].get(0, 0) / 1048576.0, 1),
+        "node8_free_gib": round(t1["nfree"].get(8, 0) / 1048576.0, 1),
+        "load1": t1["load1"],
+    }
 
 
 # The engine's own census of the pipelined batch ring, flushed when every slot goes idle:
@@ -480,9 +531,7 @@ def main():
                         "engine_tg": round(med([float(d["tg"]) for d in rq]), 2),
                         "acc": round(med([int(d["acc"]) / max(1, int(d["drf"])) for d in rq]), 3),
                         "ptok": int(float(rq[-1]["ptok"])) if rq else 0}
-                cell["foreign_cores"] = foreign_cores(s0, s1, twall1 - twall0)
-                cell["load1"] = s1[2]
-                cell["ours_cores"] = round((s1[1] - s0[1]) / 100.0 / max(0.001, twall1 - twall0), 2)
+                cell.update(cell_covariates(s0, s1, max(0.001, twall1 - twall0)))
                 cell.update(probe.report("c%s_r%d_n%d" % (corpus, rnd, n)))
                 cell.update(tail_census())
                 cells.append(cell)
@@ -514,11 +563,15 @@ def main():
                     med([c["cen_rows_s"] for c in ring]), med([c["cen_mtp_keep"] for c in ring]),
                     med([c["agg_wall"] for c in ring]) / n,
                     int(sum(c["cen_lines"] for c in ring))), flush=True)
-            fc = [c.get("foreign_cores") for c in sel if c.get("foreign_cores") is not None]
+            fc = [c for c in sel if c.get("foreign_cores") is not None]
             if fc:
-                print("     load %s  foreign_cores=%s (co-tenant)  ours_cores=%s  load1=%s" % (
-                    "n=%-2d" % n, med(fc), med([c.get("ours_cores") for c in sel]),
-                    med([c.get("load1") for c in sel])), flush=True)
+                print("     ctx %s  ours=%s foreign=%s kern=%s cores  majflt=%s/s  cached=%s GiB  "
+                      "node0 free=%s node8 free=%s GiB  load1=%s" % (
+                    "n=%-2d" % n, med([c["ours_cores"] for c in fc]),
+                    med([c["foreign_cores"] for c in fc]), med([c["kern_cores"] for c in fc]),
+                    med([c["majflt_s"] for c in fc]), med([c["cached_gib"] for c in fc]),
+                    med([c["node0_free_gib"] for c in fc]), med([c["node8_free_gib"] for c in fc]),
+                    med([c["load1"] for c in fc])), flush=True)
         base = med([c["agg_wall"] for c in cells if c["n"] == 1])
         print("agg_wall(n)/agg_wall(1): " + " ".join(
             "n=%d %.2fx" % (n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base)
