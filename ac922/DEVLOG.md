@@ -761,6 +761,41 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   fullwindow runs still lose one stream to early EOS (3/4 `held_edge`): the standing EOS-early ticket,
   untouched by this work.
 
+### H.39 - a DIMM took the lane down, and the "still degrading" tail was the hardware, not the config (11-23 19:4x-21:5x, 4-card, cold-boot recovery)
+
+- **The failure chain, reconstructed from three sources.**  19:50:45 `dmesg` prints an
+  `nvidia_uvm` stack (`uvm_gpu_service_access_counters` -> `migrate_vma_alloc_page` -> ATS
+  `service_ats_requests`): the HMM/ATS path servicing pageable-migration was stuck while the lane
+  decoded.  The serve log shows the same minute's shape: one agent request decaying 6.9 -> 4.6
+  tok/s over 1,372 tokens (`expert cache 97.3% hit`, windows healthy - the decay was I/O-side),
+  then at 19:52-19:54 a retry loop of `done: 1 tokens in 15-17 s` at 261.6K depth with the
+  engine's own note that the reply ended while still thinking.  By 20:01 the engine and its
+  supervisor were both gone, all cards at 0 MiB, and at 20:04 the ssh tunnel itself died.  The
+  operator confirmed a **failed DIMM** and reseated it; a first reboot at ~20:36 came back with
+  **node8 at 98 GiB instead of ~128** (37 GiB short, `free` total 309 -> 284 incl. the HBM windows) -
+  a warm reboot does not fully retrain memory.  A cold boot (~21:3x) restored node0 126.7 / node8
+  130.8 GiB, MemTotal 279,436,736 kB, matching the pre-failure layout, and the lane was booted on it.
+
+- **What the near-miss cost, and the knob that caught it.**  During the 20:36 degraded boot the
+  `CC_FLOOR=auto` line computed REAL=224,246 MiB and floor 44,849 MiB by itself (the conservative
+  direction, as designed): with 37 GiB missing, the shipped 48 GiB CC + 51 GiB floor would have been
+  an overcommit on exactly the path that was already OOM-storming.  No budget edits were needed for
+  the restored geometry; budgets stay as shipped.
+
+- **The two fixes this section ships.**  (1) `REASONING_BUDGET=4096` -> `reasoning_budget_tokens`
+  in the run config (`a1ab94ba6`, run.sh passthrough): at the 262K ceiling the agent asks for <=512
+  output tokens, and an uncapped thinking reply ate the whole budget and returned nothing - which
+  is what the 19:52-19:54 retry loop was, independently of the DIMM.  Quality-side it is a
+  thinking-length policy, not a numeric-path change; the existing REF gate still applies.
+  (2) The gate now boots with it; first `qualgate check post-dimm-reboot` verdict appended below.
+
+- **Standing lessons (three-discipline note updated).**  A monotonically decaying tok/s inside one
+  request with a healthy window ledger is a memory/I-O fault signature, not a MoE or a shape
+  signal - check `dmesg` for `nvidia_uvm`/ATS stacks and `numactl -H` node sizes before touching
+  lane config.  After any DIMM work: cold boot (not reboot), then `numactl -H` both nodes to
+  ~128 GiB, then start the lane.  Do not trust `free`'s total: the V100 HBM windows inflate it
+  (`node 250-253` are the windows, not CPUs).
+
 ### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual turned out to be a FLOP budget, not a knob (11-23 15:3x-17:0x, 4-card, arms FIX1/FIX5/P1)
 
 - **What triggered it.**  Arm F's first cell (H.36) reported `engine_tg 7.95` at 1,495.92 ms/window on a single
