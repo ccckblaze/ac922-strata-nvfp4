@@ -718,6 +718,19 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
 - **Harness bugs found by running them.**  (1) drain-delta rows were attributed to the wrong request; (2) `/proc/stat` idle parsing read the wrong column on this kernel's 10-field line, producing impossible idle percentages; (3) corpus calibration ran per-cell and its own probe landed in the conversation cache, contaminating the first cell - calibration now happens once and the probe is excluded.  `interf_attrib` is **abandoned** after one CTL row: its three-arm design measures nothing the curve does not already measure, better, and without a lane to itself.
 - **Not believed, and what would settle it.**  (a) The `tpw` -> ~150 projection is arithmetic, not measurement; the test is a same-boot A/B of ring shapes that keep proposals per window (>=2 rows/group) **on independent deep links**, >=3 rounds, judging `agg` with `tpw` in the cell - and H.32's rejection of 4/2 must be re-read because it was taken on *shared-prefix* aggbench.  (b) The 5.5x I/O mispricing is proven in code but its wall-clock effect is unmeasured.  (c) `no VRAM for a new window graph` fired **6,580 times** this boot - still the largest recurring event in the log and still unpriced.
 
+**CORRECTION, same day - the "lost speculative multiplier" reading is void.**  `tpw` comes from the
+`strata decode timing` line, which the engine emits on the **solo** path; during concurrent cells the harness
+sampled a population that does not describe the ring, so 1.00 was an artifact and not a measurement.  The
+engine's own batch census - `strata batch (pipelined, G groups of S): W group-steps, R rows in T ms = X rows/s
+... (A of B MTP proposals kept)`, flushed when every slot goes idle (`src/program/generate.cpp:16881`) - says
+the ring keeps its drafts: under this boot's deep-window load those lines read **rows/group-step 1.70-1.72**
+with **MTP proposals kept 68-72 %**, and the window cost *falls* with concurrency.  Speculation is intact and
+the ~150 aggregate projection is withdrawn.  What survives above is the wall-clock curve itself
+(53.1/67.4/74.5/83.8) and the saturation evidence (duty 1.00, idle 88-91 %, reach and cpu falling).
+`concscale.py` now brackets every cell by engine-log byte offset and reports the census directly (ms per
+group-step, rows/step, rows/s, MTP kept); the bottleneck is being re-derived from those numbers, and H.32's
+shape conclusion is treated as unmeasured until that run lands.
+
 ### H.34 - the operator's slow stretch, attributed: the pathological window is 87 % host CPU, not reach and not bandwidth (11-23 10:0x-10:4x, 4-card production, read-only)
 
 - **What was asked.**  After H.33 the question was whether the wall is NUMA cross-socket transfer or memory
