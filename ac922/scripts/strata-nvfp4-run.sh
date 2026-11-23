@@ -252,6 +252,12 @@ if os.environ.get("DISK_DIR"):
     if os.environ.get("DISK_SYNC"): setflag("--conversation-disk-sync-s",os.environ["DISK_SYNC"])
     if os.environ.get("DISK_PERSIST"): boolflag("--conversation-disk-persist")
 if os.environ.get("CC_MIN_TOKENS"): setflag("--conversation-cache-min-tokens",os.environ["CC_MIN_TOKENS"])
+# CC_PARK_GAIN=N parks a conversation only after it advanced N tokens past the copy it would supersede
+# (engine default 0 = park every turn).  With 0, every turn of a long conversation pays a whole-snapshot
+# copy that the next turn drops as superseded: measured 2026-11-23 on four ~131 K conversations, 2,017 MiB
+# written per re-issue, 0.7-0.9 GB/s of NVMe for 1.5-1.9 s each, and the batch step time inflated from
+# 19 ms to 45 ms on the same boot.  Pure passthrough; nothing here changes numbers.
+if os.environ.get("CC_PARK_GAIN"): setflag("--conversation-cache-park-gain",os.environ["CC_PARK_GAIN"])
 # RAM floor for parking/save/restore.  The engine measures it against MemAvailable, and this box
 # over-reports MemAvailable by the HBM-window mapping (the 341 GiB trap); MEM_LIMIT_MIB pins the
 # engine's RAM view to the real DDR so the floor means what it says.  CC_FLOOR=auto computes
@@ -264,6 +270,8 @@ if os.environ.get("DISK_DIR"):
            os.environ.get("DISK_TTL","engine-default"),os.environ.get("DISK_SYNC","engine-default"),
            "yes" if os.environ.get("DISK_PERSIST") else "no",
            os.environ.get("CC_MIN_TOKENS","0"),os.environ.get("MEM_LIMIT_MIB","unset")))
+    print("park gain: %s tokens (0 = the engine's park-every-turn default)" %
+          os.environ.get("CC_PARK_GAIN","0"))
 if os.environ.get("CC_FLOOR","").lower() == "auto":
     real=int(os.environ.get("REAL_RAM_MIB") or 0)
     if not real:
