@@ -286,6 +286,38 @@ def med(vals):
     return st.median(vals) if vals else float("nan")
 
 
+def cpu_snapshot():
+    """(busy_jiffies_all_cpus, our_jiffies) - the pair that lets a cell say how much of the machine
+    someone else was using while it ran.  The 4-card lane is no longer measurable in a vacuum: the
+    operator's NNLC job array (`xargs -P 6 ... julia`) runs beside production for hours, and it moves
+    the window time by itself, so every cell records its own foreign load instead of trusting the clock."""
+    with open("/proc/stat") as f:
+        c = f.readline().split()
+    busy = sum(int(x) for x in (c[1], c[2], c[3], c[6], c[7], c[8]))
+    ours = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % pid) as f:
+                comm = f.read().strip()
+            if not comm.startswith("strata"):
+                continue
+            with open("/proc/%s/stat" % pid) as f:
+                st_ = f.read().rsplit(")", 1)[1].split()
+            ours += int(st_[11]) + int(st_[12])      # utime + stime (fields 14 and 15)
+        except Exception:
+            continue
+    with open("/proc/loadavg") as f:
+        l1 = float(f.read().split()[0])
+    return busy, ours, l1
+
+
+def foreign_cores(t0, t1, dur):
+    """CPU cores consumed by everything that is not our own strata process tree during the interval."""
+    return round(max(0.0, (t1[0] - t0[0] - (t1[1] - t0[1])) / 100.0 / max(0.001, dur)), 2)
+
+
 # The engine's own census of the pipelined batch ring, flushed when every slot goes idle:
 #   strata batch (pipelined, G groups of S): W group-steps, R rows in T ms = X rows/s
 #       (admissions included)[; adaptive tier ...] (A of B MTP proposals kept)
@@ -404,6 +436,8 @@ def main():
                 drain()
                 n0 = row_count()
                 probe.open("c%s_r%d_n%d" % (corpus, rnd, n))
+                s0 = cpu_snapshot()
+                twall0 = time.time()
                 th = [threading.Thread(target=sustained,
                                        args=(url, sessions[i], a.budget, a.token_cap, boxes[i]))
                       for i in range(n)]
@@ -413,6 +447,7 @@ def main():
                 for t in th:
                     t.join()
                 probe.close("c%s_r%d_n%d" % (corpus, rnd, n))
+                s1, twall1 = cpu_snapshot(), time.time()
                 drain()
                 rr = tail_rows(row_count() - n0)
                 rq = tail_req_lines(n * 6)
@@ -445,6 +480,9 @@ def main():
                         "engine_tg": round(med([float(d["tg"]) for d in rq]), 2),
                         "acc": round(med([int(d["acc"]) / max(1, int(d["drf"])) for d in rq]), 3),
                         "ptok": int(float(rq[-1]["ptok"])) if rq else 0}
+                cell["foreign_cores"] = foreign_cores(s0, s1, twall1 - twall0)
+                cell["load1"] = s1[2]
+                cell["ours_cores"] = round((s1[1] - s0[1]) / 100.0 / max(0.001, twall1 - twall0), 2)
                 cell.update(probe.report("c%s_r%d_n%d" % (corpus, rnd, n)))
                 cell.update(tail_census())
                 cells.append(cell)
@@ -476,6 +514,11 @@ def main():
                     med([c["cen_rows_s"] for c in ring]), med([c["cen_mtp_keep"] for c in ring]),
                     med([c["agg_wall"] for c in ring]) / n,
                     int(sum(c["cen_lines"] for c in ring))), flush=True)
+            fc = [c.get("foreign_cores") for c in sel if c.get("foreign_cores") is not None]
+            if fc:
+                print("     load %s  foreign_cores=%s (co-tenant)  ours_cores=%s  load1=%s" % (
+                    "n=%-2d" % n, med(fc), med([c.get("ours_cores") for c in sel]),
+                    med([c.get("load1") for c in sel])), flush=True)
         base = med([c["agg_wall"] for c in cells if c["n"] == 1])
         print("agg_wall(n)/agg_wall(1): " + " ".join(
             "n=%d %.2fx" % (n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base)
