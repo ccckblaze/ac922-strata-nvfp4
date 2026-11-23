@@ -286,6 +286,52 @@ def med(vals):
     return st.median(vals) if vals else float("nan")
 
 
+# The engine's own census of the pipelined batch ring, flushed when every slot goes idle:
+#   strata batch (pipelined, G groups of S): W group-steps, R rows in T ms = X rows/s
+#       (admissions included)[; adaptive tier ...] (A of B MTP proposals kept)
+# rows and group-steps reset at each flush, so summing the lines inside one cell's byte range attributes
+# the ring's work to that cell.  This is the authoritative description of a concurrent window.  The
+# decode-timing line's tokens/window is emitted on the solo path and reads 1.00 while the ring runs, which
+# is why the first version of this harness mistook a metric-population mismatch for a lost speculative
+# multiplier (H.35 correction, 2026-11-23).
+CENSUS = re.compile(
+    r"batch \(pipelined, (\d+) groups of (\d+)\): (\d+) group-steps, (\d+) rows in ([\d.]+) ms"
+    r"(?:[^\n]*?\((\d+) of (\d+) MTP proposals kept))?")
+
+
+def tail_census():
+    """Aggregate every ring census line emitted inside this cell's byte range."""
+    try:
+        with open(ENGINE, "rb") as f:
+            f.seek(OFF["start"])
+            blob = f.read().decode("utf-8", "replace")
+    except Exception:
+        return {}
+    steps = rows = kept = total = 0.0
+    ms = 0.0
+    shape = ""
+    lines = 0
+    for m in CENSUS.finditer(blob):
+        g, s, st_, rw, t = (int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                            int(m.group(4)), float(m.group(5)))
+        steps += st_
+        rows += rw
+        ms += t
+        lines += 1
+        if m.group(6) is not None:
+            kept += int(m.group(6))
+            total += int(m.group(7))
+        shape = "%d/%d" % (g, s)
+    if not lines or ms <= 0 or steps <= 0:
+        return {"cen_lines": lines, "cen_shape": shape}
+    groups = int(shape.split("/")[0]) if "/" in shape else 1
+    return {"cen_lines": lines, "cen_shape": shape, "cen_steps": int(steps), "cen_rows": int(rows),
+            "cen_ms": int(ms), "cen_step_ms": round(ms / steps, 1),
+            "cen_rows_step": round(rows / steps, 2), "cen_rows_s": round(1000.0 * rows / ms, 1),
+            "cen_group_rate": round(1000.0 * steps / ms / max(1, groups * (rows and 1)), 1),
+            "cen_mtp_keep": round(kept / total, 3) if total else None}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions", type=int, default=4)
@@ -394,6 +440,7 @@ def main():
                         "acc": round(med([int(d["acc"]) / max(1, int(d["drf"])) for d in rq]), 3),
                         "ptok": int(float(rq[-1]["ptok"])) if rq else 0}
                 cell.update(probe.report("c%s_r%d_n%d" % (corpus, rnd, n)))
+                cell.update(tail_census())
                 cells.append(cell)
                 all_cells.append(cell)
                 print(json.dumps(cell, sort_keys=True), flush=True)
@@ -414,6 +461,15 @@ def main():
                 med([c["gpu_reach"] for c in sel]), med([c["cpu"] for c in sel]),
                 med([c["restore_ms"] for c in sel]), med([c["duty"] for c in sel]),
                 sum(c["errors"] for c in sel)), flush=True)
+            ring = [c for c in sel if c.get("cen_rows_step")]
+            if ring:
+                print("     ring %s  shape=%s step=%s ms  rows/step=%s  rows/s=%s  "
+                      "mtp_keep=%s  per-slot=%s tok/s  (engine census, %s lines)" % (
+                    "n=%-2d" % n, med([c["cen_shape"] for c in ring]),
+                    med([c["cen_step_ms"] for c in ring]), med([c["cen_rows_step"] for c in ring]),
+                    med([c["cen_rows_s"] for c in ring]), med([c["cen_mtp_keep"] for c in ring]),
+                    med([c["agg_wall"] for c in ring]) / n,
+                    int(sum(c["cen_lines"] for c in ring))), flush=True)
         base = med([c["agg_wall"] for c in cells if c["n"] == 1])
         print("agg_wall(n)/agg_wall(1): " + " ".join(
             "n=%d %.2fx" % (n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base)
