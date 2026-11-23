@@ -799,7 +799,7 @@ strata batch: piped read 32768 tokens in 14854 ms (to 98304 of 130209), then the
   decode only - cannot see the work.  That is why H.36/H.37's earlier wording ("boundary storms", "ring tax") was
   half right about the trigger and wrong about the nature: on four cards, one cold deep read and four deep decode
   streams are in plain FLOP competition.  The harness now carries the covariate that proves it
-  (`pf_cold_reads/pf_cold_tok/pf_cold_ms/pf_warm_ms/pf_frac`, commit `cf607c88b`), and every future
+  (`pf_cold_reads/pf_cold_tok/pf_cold_ms/pf_warm_ms/pf_frac`, commit `3578ecf8b`), and every future
   "concurrency is slower" verdict has to be read against it.  Two consequences worth writing down: raising the cap
   (`DECODE_MAX_MS`) buys fairness for the waiting streams at 1.55x the prompt's own wall - a real PP-for-TG trade if
   the operator's traffic is mostly continuations; and what actually reduces the tax is **not re-reading** (cache
