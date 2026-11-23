@@ -778,13 +778,23 @@ shipped and the parking experiment is closed as "no difference".
 
 **What is left, named.**  Both arms keep two collapsed cells, and every collapsed cell has the same signature:
 `rows/group-step` unchanged at 1.68, ring step up from 14.4-19.0 ms to **51.7-70.8 ms**, rows/s down from ~115 to
-~24-32, `duty` 1.00, engine CPU *down* to 0.3-1.0 cores, and zero request summaries inside the cell.  Six deep
-requests in the FIX5 boot arrived cold (`= 0 reused`, 36.1-61.2 s each); two of them are not the harness's own
-session builds and they land exactly on the two collapsed cells.  So the residual is a **cold-prefill ring tax**:
-while one 131 K prefill is in flight it is on the same four cards and the same serial feed as everyone's decode,
-and it costs the other streams 3.5-4.7x per step for its whole 36-61 s.  H.33 measured the same coupling from the
-energy side ("two 53 K cold reads concurrently took 54.4 s against 38.2 s serially, 42 % of ticks with exactly one
-card moving").  Slicing cannot remove it - the FLOPs have to run somewhere - so the lever is scheduling: let PP
-yield to TG while decode streams hold the ring.  Candidates to price next: admission ordering
-(`STRATA_ADMIT_SHORT_FIRST`, `ADMIT_MAX_WAIT_S`), `STRATA_COALESCE_PREFILL` with its `COALESCE_MIN_REQS`/
-`BURST_MS` brakes, and `--prefill` chunk pacing.
+~24-32, `duty` 1.00, engine CPU *down* to 0.3-1.0 cores, and zero request summaries inside the cell.  Six deep requests in the FIX5 boot arrived cold (`= 0 reused`, 36.1-61.2 s each); two of them are not the harness's own
+session builds and they land exactly on the two collapsed cells.
+
+**Priced and rejected: `STRATA_PIPED_READ_PIECE` (P1).**  Upstream's opt-in reads a prompt on the pipelined groups in
+pieces so the slots can decode between them, and the engine took it: `piped read 32768 tokens in 14,498 ms (to 32,768
+of 130,209), then the slots decoded 20 rows in 454 ms`.  With `DECODE_MAX_MS=400` the streams got 452-511 ms per
+~14.5 s piece - 3 % of the time - the curve did not move (medians 68.3 / 79.8 / 104.0 / 66.8 vs control 44.1 / 81.8 /
+101.7 / 70.1), and the cold read itself got **1.55x slower** (2,260 tok/s against 3,490 uninterrupted), because every
+piece ends by draining the pipeline.  Off again.
+
+**What the collapsed cells actually are.**  24 rows/s against a healthy 115 rows/s, `rows/group-step` unchanged at
+1.68, engine CPU *down* to 0.3-1.0 cores: the ring spent ~79 % of the GPU on the joining request's prompt.  The
+decode tokens were displaced, not lost, and `agg_wall` (decode only) cannot see prompt work - which is why the
+harness now reports `pf_cold_reads/pf_cold_tok/pf_cold_ms/pf_warm_ms/pf_frac` per cell.  On four cards a cold deep
+read and four deep decode streams are in plain FLOP competition; the ways to reduce the tax are to **not re-read**
+(cache policy over parked generations), to add prefill capacity (6 cards, or DP replicas), or to read less
+(SpecPrefill).  Raising `DECODE_MAX_MS` is the one lever that buys fairness for waiting streams, and it is paid for
+in PP wall - a real trade under our stated priority, not yet priced.  Same covariate, whole-log lifetime: 2,083 cold
+deep reads / 79,274 s against 22,314 warm continuations / 83,819 s - **warm reads cost as much total time as cold
+ones**, and nobody has priced the reuse scan (median 772 ms, p90 36 s at the tail).

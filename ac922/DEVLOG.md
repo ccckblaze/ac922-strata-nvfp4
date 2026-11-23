@@ -694,7 +694,7 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
-### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual is a cold-prefill ring tax (11-23 15:3x-16:2x, 4-card, arms FIX1/FIX5)
+### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual turned out to be a FLOP budget, not a knob (11-23 15:3x-17:0x, 4-card, arms FIX1/FIX5/P1)
 
 - **What triggered it.**  Arm F's first cell (H.36) reported `engine_tg 7.95` at 1,495.92 ms/window on a single
   131 K chain.  The same boot's 1-token probe was 19.34 ms/window, and another cell sat at 175.39 ms/window with
@@ -772,6 +772,41 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   priority) - and the candidate surface is admission ordering (`STRATA_ADMIT_SHORT_FIRST`, `ADMIT_MAX_WAIT_S`),
   `STRATA_COALESCE_PREFILL` with its `COALESCE_MIN_REQS/BURST_MS` brakes, and `--prefill` chunk pacing.
   **This is the named next attack; nothing in it is shipped today.**
+
+- **P1 (`STRATA_PIPED_READ_PIECE=32768`, `STRATA_PIPED_DECODE_MAX_MS=400`): the mechanism fires and does not buy
+  what we need - and it reframes the whole "cold-prefill tax".**  Upstream's opt-in (#1906) reads a prompt on the
+  pipelined groups in pieces so the slots decode between them.  The engine took it, and the log proves it:
+
+```
+strata batch: piped read 32768 tokens in 14498 ms (to 32768 of 130209), then the slots decoded 20 rows in 454 ms
+strata batch: piped read 32768 tokens in 14911 ms (to 65536 of 130209), then the slots decoded 18 rows in 511 ms
+strata batch: piped read 32768 tokens in 14854 ms (to 98304 of 130209), then the slots decoded 22 rows in 452 ms
+```
+
+  Three things in those three lines.  (1) The decode gap is **452-511 ms per ~14.5 s piece** - that is the 400 ms
+  cap, i.e. the streams got 3 % of the time, so the stall is only chopped up, not shortened.  (2) A piece costs
+  14.5-18.4 s for 32,768 tokens = **2,260 tok/s against 3,490 tok/s uninterrupted**, because every piece ends by
+  draining the pipeline: the cold read got 1.55x slower, and the first piece of one read took 34 s (upstream's own
+  documented flake: one uninterrupted run before any slot decodes).  (3) The curve is unchanged within noise -
+  P1 medians 68.3 / 79.8 / 104.0 / 66.8 against FIX1's 44.1 / 81.8 / 101.7 / 70.1 and FIX5's 62.9 / 86.7 / 66.6 /
+  73.7.  **Rejected, off again**, consistent with what upstream itself writes: "a latency choice, not a throughput
+  gain".
+
+- **So the collapsed cells were never a scheduling fault.**  A collapsed cell reads 23.9 agg and **24 rows/s**
+  against a healthy **115 rows/s**, with `rows/group-step` unchanged at 1.68 and engine CPU *down* to 0.3-1.0 cores.
+  24/115 = 21 %, and the prompt in flight is 131 K tokens at ~2,260-3,490 tok/s: the ring was spending ~79 % of the
+  GPU on the new request's read.  The decode tokens are not lost, they are displaced, and `agg_wall` - which counts
+  decode only - cannot see the work.  That is why H.36/H.37's earlier wording ("boundary storms", "ring tax") was
+  half right about the trigger and wrong about the nature: on four cards, one cold deep read and four deep decode
+  streams are in plain FLOP competition.  The harness now carries the covariate that proves it
+  (`pf_cold_reads/pf_cold_tok/pf_cold_ms/pf_warm_ms/pf_frac`, commit `cf607c88b`), and every future
+  "concurrency is slower" verdict has to be read against it.  Two consequences worth writing down: raising the cap
+  (`DECODE_MAX_MS`) buys fairness for the waiting streams at 1.55x the prompt's own wall - a real PP-for-TG trade if
+  the operator's traffic is mostly continuations; and what actually reduces the tax is **not re-reading** (cache
+  policy, fewer superseded generations), more prefill capacity (6 cards / replicas), or SpecPrefill reading less.
+  One more number from the same covariate, whole-log lifetime: cold deep reads 2,083 / 79,274 s against warm deep
+  continuations **22,314 / 83,819 s** - warm reads cost as much total time as cold ones, so the reuse path itself
+  (scan + restore, median 772 ms, p90 36 s at the tail) is a ticket nobody has priced.
 
 - **Not believed / queued.**  (a) The reserve value is priced on the 4-card shape; 6 cards leave less per card
   behind (`--trim-stage-weights` there keeps ~11 GiB), so re-check the expert-cache hit rate after the next 6-card

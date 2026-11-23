@@ -55,6 +55,7 @@ learned file (adopted below), `--trim-stage-weights` (adopted below).
 
 | Ticket | Verdict | Evidence |
 | --- | --- | --- |
+| `STRATA_PIPED_READ_PIECE=32768` + `STRATA_PIPED_DECODE_MAX_MS=400` (P1) | **dead for our priority**: the pipelined prompt pieces fire (`piped read 32768 tokens in 14,498 ms, then the slots decoded 20 rows in 454 ms`) but a 400 ms cap per ~14.5 s piece is 3 % of the time, the curve is unchanged within noise (medians 68.3/79.8/104.0/66.8 vs control 44.1/81.8/101.7/70.1), and the cold read itself gets **1.55x slower** (2,260 vs 3,490 tok/s) because each piece drains the pipeline.  Re-pricing it means raising `DECODE_MAX_MS` and *paying* PP for fairness - a latency buy, as upstream says, not throughput | H.37, 4-card curve, three boots |
 | TurboQuant KV (k8v4) | **dead**: RAM −27% bought with PP −7–10%; quality not locally measurable | paired wave; re-priced once more after cold-cache PP landed, still negative exchange rate |
 | Batched lockstep (old shape) | dead — **but see above**: the original verdict was taken on groups-of-1 and is partially overturned by correct shape | §"batch-groups auto" audit |
 | DP `replicas: 3` | shelved: conflicts with shared expert arena (`--resident-budget-gib` is ARENA_INCOMPATIBLE); buys streams, costs 262K full-window per replica.  It is **not** a prefill accelerator either: cold PP is a throughput floor, so a second engine divides the same ~2500 tok/s | read-only audit of `serve/replicas.py` + paired cold bursts (11-20) |
