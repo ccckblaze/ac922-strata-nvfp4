@@ -91,9 +91,13 @@ def corpus_text(corpus, n_chars, salt, pool):
 
 
 def probe_tokens_per_char(url, text):
-    """One cheap request, then read the engine's own token count for it back off the log."""
+    """One cheap request, then read the engine's own token count for it back off the log.
+
+    The probe asks for no checkpoint: a calibration sample must not park a chain in the conversation
+    cache, because parked deep chains are the very residency pressure the curve is meant to measure."""
     off = os.path.getsize(ENGINE)
-    plain(url, [{"role": "user", "content": text}])
+    plain(url, [{"role": "user", "content": text}], {"temperature": 0.0,
+                                                     "strata_checkpoint": False})
     time.sleep(0.7)
     try:
         with open(ENGINE, "rb") as f:
@@ -123,9 +127,11 @@ def call(url, body):
     return urllib.request.urlopen(req, timeout=3600)
 
 
-def plain(url, messages):
+def plain(url, messages, sampling=None):
     body = {"model": "strata", "messages": messages, "max_tokens": 1, "temperature": 0,
             "stream": False}
+    if sampling:
+        body["sampling"] = sampling
     t0 = time.time()
     with call(url, body) as f:
         json.loads(f.read())
@@ -307,6 +313,7 @@ def main():
           flush=True)
 
     pool = prose_pool()
+    ratios = {}
     all_cells = []
     for corpus in [c.strip() for c in a.corpus.split(",") if c.strip()]:
         if corpus == "prose" and not pool:
@@ -316,8 +323,11 @@ def main():
         for i in range(a.sessions):
             salt = "cs3-%d-%d-%s" % (os.getpid(), i, corpus)
             chars = int(a.deep_words * 6.0)
+            if a.target_tokens and corpus not in ratios:
+                ratios[corpus] = probe_tokens_per_char(
+                    url, corpus_text(corpus, 20000, "calib-%s" % corpus, pool))
             if a.target_tokens:
-                r = probe_tokens_per_char(url, corpus_text(corpus, 20000, salt + "-probe", pool))
+                r = ratios.get(corpus)
                 if r:
                     chars = int(a.target_tokens / r)
                     print("  %s calibrated %.5f tokens/char -> %d chars for %d tokens" % (
