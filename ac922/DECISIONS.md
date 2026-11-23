@@ -871,3 +871,22 @@ identical to REF, `acc-drift 0.962`, relay agreement 0.12 which the pre-incident
 **Decision.**  Every cell from a concurrency harness now carries a boot stamp, and any cell straddling a restart is
 discarded.  The `#267` signature joins `mtp: round capture: out of memory` in the known-failure list; if it recurs
 without load on the lane, it becomes a launcher-level investigation rather than a measurement footnote.
+
+## Rejected: serve-side thinking cap (`REASONING_BUDGET` -> `reasoning_budget_tokens`) (2026-11-23, 4-card)
+
+**The ticket.**  At the 262K ceiling the operator's agent showed a `done: 1 tokens in 15-17 s`
+retry loop with the engine's "reply reached max tokens while still thinking" note, and I read it as
+"thinking eats the whole output budget".  Proposed fix: cap thinking at 4096 for every request via
+the run config (`serve/runconfig.py:35`).
+
+**The gate evidence.**  Booted 21:39 with the cap -> `QUALGATE-FAIL`: `det-hash-changed-vs-REF`,
+`relay-cell-agreement 0/8 = 0.00`, `acc-drift 0.668`.  Bisect with one variable (cap removed, same
+binary/config, boot 21:50) -> back to `QUALGATE-PASS`, `acc-drift 0.926`, relay 1/8 + the known
+eight drift WARNs, matching the pre-ticket boots.  A thinking-length cap is *not* numerically inert:
+it changes which tokens close the reply, and the REF gate catches it exactly as designed.
+
+**Rejected.**  Quality-for-speed is out of bounds by standing rule; and the loop was never a
+server bug - the client itself requested `~1` output token at the ceiling, so every honest reply is
+1 token.  The correct fix is client-side: keep 2-4K of output room, roll the conversation, and never
+clamp `max_tokens` to the last few hundred tokens at the window edge.  The run.sh passthrough stays
+(unset = shipped behaviour); `lane.env` keeps the line commented with the bisect note.

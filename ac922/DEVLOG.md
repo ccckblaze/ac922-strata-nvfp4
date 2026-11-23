@@ -761,7 +761,7 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   fullwindow runs still lose one stream to early EOS (3/4 `held_edge`): the standing EOS-early ticket,
   untouched by this work.
 
-### H.39 - a DIMM took the lane down, and the "still degrading" tail was the hardware, not the config (11-23 19:4x-21:5x, 4-card, cold-boot recovery)
+### H.39 - the 19:5x death had software explanations that do not need the DIMM, and the thinking-budget "fix" turned out to move the outputs (11-23 19:4x-22:0x, 4-card, cold-boot + gate bisect)
 
 - **The failure chain, reconstructed from three sources.**  19:50:45 `dmesg` prints an
   `nvidia_uvm` stack (`uvm_gpu_service_access_counters` -> `migrate_vma_alloc_page` -> ATS
@@ -782,12 +782,26 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   an overcommit on exactly the path that was already OOM-storming.  No budget edits were needed for
   the restored geometry; budgets stay as shipped.
 
-- **The two fixes this section ships.**  (1) `REASONING_BUDGET=4096` -> `reasoning_budget_tokens`
-  in the run config (`a1ab94ba6`, run.sh passthrough): at the 262K ceiling the agent asks for <=512
-  output tokens, and an uncapped thinking reply ate the whole budget and returned nothing - which
-  is what the 19:52-19:54 retry loop was, independently of the DIMM.  Quality-side it is a
-  thinking-length policy, not a numeric-path change; the existing REF gate still applies.
-  (2) The gate now boots with it; first `qualgate check post-dimm-reboot` verdict appended below.
+- **Causality, corrected after the operator's pushback (they were right).**  Nothing in the 19:4x-19:5x
+  slowness needs the hardware: (i) the 6.9 -> 4.6 tok/s decay was a `max 92769 tokens` request - deep
+  window + ring tax, the H.37 accounting, not a memory fault; (ii) the 19:52-19:54 `1 tokens in 15-17 s`
+  retry loop was fully explained by the *client asking for ~1 output token* at the 262K ceiling
+  (`done: 1 tokens ... (length)` - the reply was always going to be 1 token); (iii) the 19:50:45 dmesg
+  UVM/ATS stack is plausibly a sample, not a stall - `dmesg | grep -c uvm` reads 0 after the cold boot.
+  The DIMM explains exactly one event: the engine *and* its supervisor both disappearing ~19:54 with the
+  tunnel dying minutes later, plus the half-trained node8 (98 GiB) after the warm reboot.  Held as
+  hardware-incident, decoupled from the perf story.
+
+- **The thinking-budget ticket is REJECTED, not shipped.**  `REASONING_BUDGET=4096` was booted at
+  21:39 (`a1ab94ba6`) and the post-boot gate came back **QUALGATE-FAIL**: `det-hash-changed-vs-REF`,
+  `relay-cell-agreement 0/8 = 0.00`, `acc-drift 0.668`.  Single-variable bisect - same binary, same
+  everything, budget line commented, boot at 21:50 - returned to the exact pre-ticket shape:
+  **QUALGATE-PASS, acc-drift 0.926, relay 1/8 + the 8 known drift WARNs**.  So serve-side thinking
+  truncation moves the replies (it is a quality change, forbidden by the ship rule), and it was never
+  the right fix anyway: the 1-token loop was a client budget artifact.  The passthrough in run.sh
+  stays (a knob, harmless when unset); `lane.env` ships the line commented with the bisect note.
+  The correct remedy for near-cap agents lives on the client: keep >=2-4K of output room or roll the
+  conversation; at the ceiling `max_tokens` must never clamp to ~1.
 
 - **Standing lessons (three-discipline note updated).**  A monotonically decaying tok/s inside one
   request with a healthy window ledger is a memory/I-O fault signature, not a MoE or a shape
