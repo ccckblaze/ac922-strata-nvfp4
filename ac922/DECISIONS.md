@@ -805,3 +805,59 @@ respawned the lane on `mtp: round capture: out of memory`, so it is the one stag
 concurrency penalty 1.42x -> 1.06x), but the shipped arm ran there while the lane was saving 48 GiB of idle
 conversations to disk, so the pair is contaminated.  A 53K verdict needs both arms in one boot with the disk
 tier quiesced - filed, low priority behind the NUMA slice ticket.
+
+## Measured: the deep-window concurrency loss is a lost speculative multiplier, not capacity (2026-11-23, 4 cards)
+
+H.32 called 4x131K concurrency "capacity-bound".  A proper scale curve on independent deep links, in a quiet
+lane, one boot, two rounds, says otherwise:
+
+| streams | agg tok/s | per-stream | mswin ms | **tpw** | reach ms | cpu ms | idle % |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 53.1 | 53.1 | 28.2 | **1.86** | 4.07 | 0.77 | 88 |
+| 2 | 67.4 | 33.7 | 20.1 | **1.00** | 3.42 | 0.79 | 89 |
+| 3 | 74.5 | 24.8 | 19.8 | 1.00 | 3.38 | 0.57 | 90 |
+| 4 | 83.8 | 21.0 | 19.9 | 1.00 | 3.20 | 0.33 | 91 |
+
+Every saturation signal moves the wrong way: windows get *cheaper* (28.2 -> 19.9 ms), reach gets *cheaper*,
+host CPU goes idle, duty stays 1.00.  Only `tpw` - tokens advanced per window per slot - collapses from 1.86 to
+exactly 1.00, which matches the boot's own `4 pipelined groups of 1 slot draft up to 1 MTP proposal`.  So the
+concurrency tax is the speculative multiplier leaving the ring, not bandwidth, not NUMA, not compute.  Restoring
+`tpw` inside the ring projects the same four streams to **~150 agg** (1.8x observed).
+
+**Decision.**  Admission (cap the running set) stays as shipped - it is still correct for the traffic the operator
+actually sends.  The throughput ticket is re-ordered: a same-boot A/B of ring shapes that keep >=2 rows per group,
+run on *independent* deep links with >=3 rounds, judging `agg` with `tpw` recorded per cell.  H.32's rejection of
+`--batch-groups 2` was taken on shared-prefix aggbench and does not carry here.
+
+## Ticket, config-only: `STRATA_SSD_GBPS` - the drive classifier misses LVM and misprices cold reads 5.5x (2026-11-23)
+
+`src/program/generate.cpp:1759` classifies the backing device by *name* (`dev.rfind("nvme",0)==0 -> 2.5 GB/s`),
+else falls through to `0.45` "SATA-class SSD (assumed)".  `/data` is an LVM volume - `dm-2`, VG `nvmevg`,
+`queue/rotational=0`, on a PM1725b - so production has always taken the SATA branch, and the engine says so at
+boot: `drive 0.45 GB/s (dm-2 is a SATA-class SSD (assumed))`.  `prefill_plan.hpp:97` prices plans with
+`read_bytes/(ssd_gbps*1e9)`, so the I/O term of every cold-prefill plan is 5.5x too expensive.  The override
+`STRATA_SSD_GBPS` (`generate.cpp:1751`) exists and has never been set.
+
+**Decision.**  Promote to a first-class paired A/B (`=2.5` vs unset) reading cold PP and the plan self-report.
+It changes plans, so it is gated like a chunking ticket: `bash /root/selfcheck.sh` first, then the three gates.
+Not yet adopted - the code path is proven, the wall-clock effect is not.
+
+## Downgraded: the 4-card ship shape is inside my own reproduction spread (2026-11-23, 4 cards)
+
+The same config, same protocol, same depth gave **82.1** and **52.7** aggregate across two rounds at n=2 - a
++-27 % spread.  The evidence behind `--batch-groups 4` over `--batch-groups 2` (81.8 vs 72.7, 12 %) now sits
+inside that spread.  The shape stays as shipped - it also won the 11-21 sweep and changing it costs a restart for
+no demonstrated gain - but the DECISIONS entry is re-labelled *not independently reproduced*, and the standing
+rule becomes: **no shape claim from fewer than 3 rounds**, and any claim under ~25 % needs same-boot pairing.
+
+## Incident: the production engine died and restarted under the load harness (2026-11-23 11:21:36)
+
+`Unrecoverable native verification failure: verify: timed out at layer 20; its GPU waits were released but the
+GPU did not finish within 5 s (#267)` - serve wrapper auto-restarted the lane (pid 229099 -> 253968) inside my own
+deep-pressure window.  Health was 200 throughout; the post-restart gate passed (`QUALGATE-PASS`, det hashes
+identical to REF, `acc-drift 0.962`, relay agreement 0.12 which the pre-incident boot also logged).  Causation is
+**unproven** - I will not claim my harness did it, and I will not claim it didn't.
+
+**Decision.**  Every cell from a concurrency harness now carries a boot stamp, and any cell straddling a restart is
+discarded.  The `#267` signature joins `mtp: round capture: out of memory` in the known-failure list; if it recurs
+without load on the lane, it becomes a launcher-level investigation rather than a measurement footnote.
