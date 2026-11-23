@@ -742,8 +742,24 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   RT-vs-SH rerun showed the flags are not the axis there).  Arm A/B with `STRATA_AUTO_NEW_MTP=0`
   passed through `strata-nvfp4-run.sh` measures the factory `--spec 6` arm on this lane for the first
   time.  Verdict lands with `ship4c-ab.sh ab1123`: A = default (spec 8/proxy), B = factory; both arms
-  byte-exact fullwindow 4 x (262144-512) + aggbench 245K x 4 twice + 8K x 4.  Results to be appended
-  to this section when the run completes (~22:30), together with the ship decision.
+  byte-exact fullwindow 4 x (262132+512) + aggbench 245K x 4 twice + 8K x 4 (`ab1123`, 18:37-19:32):
+
+  | arm | fullwindow held_edge | fw sum_tg | agg 245K x 4 (r1/r2 sum_tg) | agg 8K x 4 |
+  | --- | --- | ---: | ---: | ---: |
+  | A-default (--spec 8 proxy auto) | 3/4 | 125.3 | 90.8 / 92.9 | 138.5 |
+  | B-factory (--spec 6, min-p 0.7) | 3/4 | 122.8 | 91.0 / 93.1 | 130.0 |
+
+  Verdict: **the auto FORK_MTP_FLAGS are neither a defect nor a gain on this lane** - full window and
+  245K x 4 sit inside noise (<= 2.5%), and the only moving cell is 8K x 4 (138.5 vs 130.0, +6.5% for A,
+  one sample per arm).  H.35(b) closes; ship state unchanged.  The lane measures at the **bottom edge**
+  of the historical band (91-93 vs 93.5-106.9, §8's own reps read 115.8/90.5), so "we used to be
+  better" is now quantified as (a) the instrument/caliber story above, (b) traffic depth, and (c) at
+  most a ~10% real drift - not a collapse, and not the spec arm.  Caveat written into the gate: the
+  restore boot inherited no `STRATA_AUTO_NEW_MTP` and shows factory `--spec 6` argv with health 200,
+  so the effective draft arm across supervisor restarts is not deterministic; `ship4c-gate.sh` records
+  spec/mtp fields as covariates rather than gating on them until the auto path is pinned.  Both
+  fullwindow runs still lose one stream to early EOS (3/4 `held_edge`): the standing EOS-early ticket,
+  untouched by this work.
 
 ### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual turned out to be a FLOP budget, not a knob (11-23 15:3x-17:0x, 4-card, arms FIX1/FIX5/P1)
 
