@@ -32,8 +32,12 @@ QUALGATE_DIR=${QUALGATE_DIR:-/data/work/qualgate}
 EVAL_DIR=${EVAL_DIR:-$REPO/ac922/eval}
 
 case "$CARDS" in
-  4) GPUS=${GPUS:-0,1,3,4};     EXPECT_GROUPS=4; EXPECT_ROWS=1 ;;   # 2 cards per island (0,1 node0; 3,4 node8)
-  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=3; EXPECT_ROWS=2 ;;
+  # EXPECT_GROUPS/EXPECT_ROWS describe the shape the engine should confirm in its own words.  The defaults are
+  # the shipped geometry; a caller running a shape experiment sets them beside STRATA_BATCH_GROUPS so the proof
+  # still comes from the boot log, not from what we typed (measured 2026-11-23: with the pair hard-wired, a
+  # 4/2 arm cannot boot at all, which made the 4/4-vs-4/2 question unanswerable rather than answered).
+  4) GPUS=${GPUS:-0,1,3,4};     EXPECT_GROUPS=${EXPECT_GROUPS:-4}; EXPECT_ROWS=${EXPECT_ROWS:-1} ;;
+  6) GPUS=${GPUS:-0,1,2,3,4,5}; EXPECT_GROUPS=${EXPECT_GROUPS:-3}; EXPECT_ROWS=${EXPECT_ROWS:-2} ;;
   *) echo "usage: $(basename $0) <4|6> <start|stop|restart|status> [--reanchor]"; exit 2 ;;
 esac
 export GPUS CUDA_VISIBLE_DEVICES="$GPUS"
