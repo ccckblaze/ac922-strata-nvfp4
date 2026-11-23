@@ -694,6 +694,57 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.38 - the production boot's own ledger: what is not costing tg, what is, and why "we used to be better" was a caliber question (11-23 17:5x-18:4x, 4-card, read-only audit + ship-gate build)
+
+- **What was asked.**  The operator reported production still slow and asked whether the full-window
+  concurrency has to come down, on the theory that concurrency makes the MoE cache exchange more
+  often and thereby costs tg.  A second question: the 4-card lane had good numbers before, why is it
+  bad now.  Both are answerable from one boot's log; the boot was `17:05:03` (pid 344062), and its
+  slice plus `/tmp/all.txt` (whole engine log, 511,937 lines) are the evidence base below.
+
+- **The MoE-exchange half of the theory is true as a rate effect and false as a concurrency effect.**
+  Bucketing all 10,815 decode-timing windows: `sw < 0.5/window` runs 24.94 ms/window (tg 40.1),
+  `sw 5-10` runs 52.7, `sw 10-20` runs 70.9 - the storms are 14.8% of windows and 25.4% of window
+  time.  But windows adjacent to cold deep reads average **6.66** swaps/window while idle windows
+  average **10.79**: the storms are anti-correlated with concurrent prefill.  They ride the
+  session churn instead - 37,459 park and 11,309 restore lines this boot, 241-4,434 adapt rounds, and
+  the signature `96.0 swaps/window` (= all 96 layers re-materialised in one window) on 471 windows.
+  Lowering `--conversation-cache-slots` will not buy this back; FIX5 already measured slots 32 vs 8
+  as a wash at 131K.
+
+- **What the boot's wall-clock actually spent.**  Cold deep reads (>50K, `0 reused`): 2,088 lines /
+  79,660 s.  Warm deep continuations: 21,526 lines / 67,055 s, of which 16,212 are follow-ups that
+  generate <=3 tokens at a mean scan cost of 3.30 s (14.9 h for "ask one question inside a deep
+  session").  Decode: 82,742 s of generation lines, 327 s of pure window time at mean 30.26 ms.
+  The user-visible slowness is the cache/prefill road (TTFT), not the window rate, and H.35's line
+  that the reuse path is an unpriced ticket is now quantified.
+
+- **Full-window concurrency is a capacity question with a hard ceiling, and production was under it.**
+  Per-session parked state at deep traffic averages 3.07 GiB (180K+ tokens); the parked-bytes counter
+  crossed 32 GiB with the eviction counter already at 2,633, and evictions kept climbing to the
+  `--conversation-cache-mib 49152` edge (footprint tier 48 GiB -> evictions 153+ on the boot slice).
+  Byte-exact 262K x 4 is comfortably inside the budget; the eviction treadmill comes from dozens of
+  near-cap sessions, each ~24 GiB of snapshot churn, not from the four concurrent ones.
+
+- **Why "before" looked better: two calibers were being compared.**  `PERFORMANCE.md` gates the lane
+  with `aggbench --depth 245000 --n 4` (93.5 / 100.2 / 103.5 sum_tg, wall 79.6, ship band 93-107),
+  while H.36/H.37 quoted a newer instrument (`concscale`, four independent 131K chains, 74-80 mean)
+  - different corpus, depth and definition, so the drop from 106.9 to 74 was partly an instrument
+  change.  The "220" in the same conversation is `PERFORMANCE.md:17` = 8K x **6** short-window
+  aggregate.  The ship gate is now re-stated in the mandated caliber: byte-exact full window first,
+  concurrency second (`ac922/scripts/ship4c-gate.sh`, `ship4c-ab.sh`).
+
+- **The boot that answered "is it contamination" answered "it is the auto path".**  The running argv
+  carried `--spec 8 --mtp-head proxy --mtp-cum auto` while final.json says `--spec 6 --spec-min-p
+  0.7`; a clean `lane.sh 4 restart` reproduced the same rewrite, and `strata_control/drafting.py:425
+  FORK_MTP_FLAGS` is the writer.  Its docstring restricts the flags to "one request at a time, one
+  card's layers (not a split)" and they are live on our 4-stage split (H.35(b) queued this; the 6-card
+  RT-vs-SH rerun showed the flags are not the axis there).  Arm A/B with `STRATA_AUTO_NEW_MTP=0`
+  passed through `strata-nvfp4-run.sh` measures the factory `--spec 6` arm on this lane for the first
+  time.  Verdict lands with `ship4c-ab.sh ab1123`: A = default (spec 8/proxy), B = factory; both arms
+  byte-exact fullwindow 4 x (262144-512) + aggbench 245K x 4 twice + 8K x 4.  Results to be appended
+  to this section when the run completes (~22:30), together with the ship decision.
+
 ### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual turned out to be a FLOP budget, not a knob (11-23 15:3x-17:0x, 4-card, arms FIX1/FIX5/P1)
 
 - **What triggered it.**  Arm F's first cell (H.36) reported `engine_tg 7.95` at 1,495.92 ms/window on a single
