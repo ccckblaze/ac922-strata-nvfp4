@@ -452,6 +452,10 @@ burst, published `sum_tg` caliber): 4-card boots `cutover061` (15:38) and `repan
 
 ## 8. Conversation-disk cold tier — adopted (2026-11-20)
 
+> **Superseded for this lane 2026-11-23 (H.36): the tier ships OFF.**  The numbers below are real and stay
+> on the record; in production the layer writes 156-352 GiB per boot against 2-9 read-backs on the same NVMe as
+> the expert pack, and on a few-deep-chains regime its writer costs a third of single-stream deep tg.
+
 What: evicted parked conversations go to NVMe and are read back on the next turn instead of being
 re-prefilled.  Engine flags (`--conversation-disk-*`, `--conversation-cache-min-free-mib`,
 `--memory-limit-mib`) are upstream since the 0.2.15 line; this lane wires them through env only
@@ -732,3 +736,55 @@ Two honest notes:
 - The deeper lesson is procedural and lives in `DEVLOG.md` (H.26): a config adoption must be priced in
   every band it can touch, and `lanecheck.sh` now grades short-band turn reuse on every hand-back so a
   regression like this cannot sit invisible for two days again.
+
+## 11. The window-graph VRAM starvation: the lane's deep-window slowness, priced and fixed (2026-11-23, 4 cards)
+
+**Symptom the operator felt.**  Single-stream deep-window decode that should run at ~65 tok/s came out at
+13.8-29.9 tok/s, and it looked "superlinear in tokens per window": `175.39 ms/window` at T 2.43, one cell at
+`1,495.92 ms/window`, while the same boot's 1-token probe was `19.34 ms/window`.
+
+**Cause (one config line, zero numeric path).**  `--expert-cache auto` takes everything the dense weights leave
+(`12.57 GiB free, 832 MiB reserved ... -> 4470 slots`), and the CUDA window-graph library - one capture per
+tokens-per-window shape, and `--spec 8` means shapes 1..9 times the group layouts - had to fit in the same
+832 MiB.  It did not.  Every new shape made the engine throw away its own library mid-decode and re-capture:
+
+```
+strata verify: no VRAM for a new window graph: freed 0 batch layouts, 9 solo window graphs and 0 MiB of the
+               expert cache (said once; a larger --vram-reserve-mib avoids it)     <- 6,655 lines in one boot
+strata verify: capturing the 4-token window (44 MiB of VRAM free)
+strata verify: captured the 4-token window (...) in 1047.3 ms                       <- inside a live window
+```
+
+**Fix and price.**  `ac922/configs/strata-nvfp4-final.json`: `--vram-reserve-mib` 832 → **1536** (DEVLOG H.37).
+
+| measure | boot at 832 | boot at 1536 |
+| --- | ---: | ---: |
+| graph-eviction lines | 6,655 | **0** |
+| slowest window-graph capture | 1,047.3 ms | **7.2 ms** |
+| deep 131 K single stream, T ~2.4-3.0 | 175.39 ms/window (tg 13.8) | **31.40 ms/window** (T 2.97) |
+| expert cache | 4,470 slots, 98.1 % hit | 4,203 slots (-6 %), 97.3-97.5 % hit |
+
+**Deep-window concurrency, same protocol as §10/H.35-H.36** (four independent ~131 K chains, words, 60 s cells,
+600-token turns, two rounds ascending + descending, median of the two rounds per n):
+
+| arm | n=1 | n=2 | n=3 | n=4 | mean of 8 cells |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FIX1 - reserve 1536, slots 32 | 44.1 | 81.8 | 101.7 | 70.1 | 74.4 |
+| FIX5 - reserve 1536, slots 8 | 62.9 | 86.7 | 66.6 | 73.7 | 72.5 |
+
+Healthy cells now reach **109-116 agg tok/s at three and four deep chains** (H.36's best tier-off cell was 115.8,
+its n=4 median 60.5).  The two arms are inside each other's noise, so `--conversation-cache-slots 32` stays
+shipped and the parking experiment is closed as "no difference".
+
+**What is left, named.**  Both arms keep two collapsed cells, and every collapsed cell has the same signature:
+`rows/group-step` unchanged at 1.68, ring step up from 14.4-19.0 ms to **51.7-70.8 ms**, rows/s down from ~115 to
+~24-32, `duty` 1.00, engine CPU *down* to 0.3-1.0 cores, and zero request summaries inside the cell.  Six deep
+requests in the FIX5 boot arrived cold (`= 0 reused`, 36.1-61.2 s each); two of them are not the harness's own
+session builds and they land exactly on the two collapsed cells.  So the residual is a **cold-prefill ring tax**:
+while one 131 K prefill is in flight it is on the same four cards and the same serial feed as everyone's decode,
+and it costs the other streams 3.5-4.7x per step for its whole 36-61 s.  H.33 measured the same coupling from the
+energy side ("two 53 K cold reads concurrently took 54.4 s against 38.2 s serially, 42 % of ticks with exactly one
+card moving").  Slicing cannot remove it - the FLOPs have to run somewhere - so the lever is scheduling: let PP
+yield to TG while decode streams hold the ring.  Candidates to price next: admission ordering
+(`STRATA_ADMIT_SHORT_FIRST`, `ADMIT_MAX_WAIT_S`), `STRATA_COALESCE_PREFILL` with its `COALESCE_MIN_REQS`/
+`BURST_MS` brakes, and `--prefill` chunk pacing.

@@ -12,6 +12,7 @@ when bit-exactness or risk justified it.
 | `STRATA_FUSE_DECODE` | 1 | same doc's bit-exact fuse | kept |
 | `STRATA_ARGMAX_ROWS_SM70` | 1 | bit-exact argmax rows | kept |
 | `STRATA_PF_WMMA` | 1 | FP16 tensor-core prompt experts | **verified inert on NVFP4 packs**; kept for A/B only |
+| `--vram-reserve-mib 1536` *(was 832/700)* | VRAM the expert cache may not take, so window-graph capture always has room | the shipped 832 starved it: 6,655 `no VRAM for a new window graph` in one boot, re-captures up to **1,047 ms inside a live window**, deep 131 K decode at 175.39 ms/window (tg 13.8).  At 1536: zero evictions, slowest capture 7.2 ms, **31.40 ms/window**.  Cost 4470 -> 4203 expert slots (-6 %), hit rate 98.1 -> 97.3-97.5 % (H.37) |
 | `STRATA_SELECT_SIMT` / `..._ALT_MIN_TOKENS` | 2 / 65536 | SIMT select path for long windows | small positive, adopted with the batchenv wave |
 | `STRATA_PREFILL_STREAM_AHEAD` | 0 | do not steal decode bandwidth for prefill lookahead | direction we chose deliberately |
 
@@ -45,7 +46,8 @@ when bit-exactness or risk justified it.
 
 `--spec 6 --spec-min-p 0.7` (MTP depth; acceptance 0.738–0.75 measured), `--kv int8
 --kv-resident 32768`, `--max-context 262144`, `--ple-io ram --ple-row-cache 1048576`,
-`--prompt-cache 6`, `--resident-budget-gib 64`, `--vram-reserve-mib 700`,
+`--prompt-cache 6`, `--resident-budget-gib 64`, `--vram-reserve-mib 1536` (see the adopted row above:
+700/832 starved window-graph capture and the price was a per-window millisecond-second),
 `--prefill auto`, `--expert-cache auto`, `--layer-split auto`, expert-profile = the pack's
 learned file (adopted below), `--trim-stage-weights` (adopted below).
 
@@ -485,6 +487,13 @@ Switching also removed a real footgun: the reference config carried the 6-card b
   det x3, 4x full window, GEOMETRY-PASS) before the numbers in `PERFORMANCE.md` stay valid.
 
 ## Adopted: the conversation-disk cold tier (RAM floor + on-disk parking), with a geometry caveat (2026-11-20)
+
+> **Superseded for this lane on 2026-11-23 (DEVLOG H.36): the tier is OFF in the shipped `lane.env`.**  The
+> numbers below stand - resurrection really is 6.9 s instead of 46 s - but in production the tier writes 156-352 GiB
+> per boot against 2-9 read-backs (40:1) on the same NVMe that holds the expert pack, and on the regime this box
+> actually runs (a few deep chains, re-continued every turn) its writer costs a third of single-stream deep tg
+> (68.2 -> 29.9 tok/s at 1.27 GB/s of writes).  It is one env line (`DISK_DIR`) from coming back for traffic made of
+> many *distinct* long sessions; price it against its own device or a writer rate limit first - the engine has neither.
 
 - Shipped as pure launcher/env on top of upstream's `--conversation-disk-*` five flags
   (`runbook §327`): `DISK_MIB=524288`, `DISK_TTL=0`, `DISK_PERSIST=1`, `DISK_SYNC=30`,

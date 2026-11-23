@@ -694,6 +694,157 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.37 - the lane's deep-window slowness was VRAM starvation on CUDA-graph capture, and the concurrency residual is a cold-prefill ring tax (11-23 15:3x-16:2x, 4-card, arms FIX1/FIX5)
+
+- **What triggered it.**  Arm F's first cell (H.36) reported `engine_tg 7.95` at 1,495.92 ms/window on a single
+  131 K chain.  The same boot's 1-token probe was 19.34 ms/window, and another cell sat at 175.39 ms/window with
+  T 2.43.  Read as a law, "ms/window is superlinear in tokens/window" would have sent me after `--spec` width.
+  A read-only census of the log said otherwise.
+
+- **The mechanism, in the engine's own words.**  `strings`/log: `strata verify: no VRAM for a new window graph:
+  freed 0 batch layouts, 9 solo window graphs and 0 MiB of the expert cache (said once; a larger
+  --vram-reserve-mib avoids it)`, which appeared **6,655 times** in that boot.  Adjacent lines show why it could
+  free nothing: `capturing the 4-token window (44 MiB of VRAM free)`.  `--expert-cache auto` takes everything the
+  dense weights leave (`12.57 GiB free, 832 MiB reserved ... -> 4470 slots`), and the window-graph library - one
+  capture per (tokens-per-window, slot-layout) shape, and `--spec 8` makes that 1..9 shapes times the group
+  layouts - had to live in the 832 MiB the reserve gave it.  When it did not fit, the engine evicted its own graph
+  library and re-captured **inside a live decode window**: the slowest capture measured **1,047.3 ms**, and
+  940.6/965.7 ms captures show up in the same boot.  That is the whole "superlinear" story: a window that happened
+  to need a fresh graph paid a second, and the average over 1,237 windows came out at 175 ms.
+
+- **One config line, and the pathology is gone.**  `ac922/configs/strata-nvfp4-final.json`: `--vram-reserve-mib`
+  832 -> **1536**.  Same protocol, same boot shape, nothing else touched:
+
+| measure | boot at 832 (arm F) | boot at 1536 (FIX1) |
+| --- | ---: | ---: |
+| `no VRAM for a new window graph` | 6,655 | **0** |
+| slowest window-graph capture | 1,047.3 ms | **7.2 ms** |
+| deep 131 K decode, T ~2.4-3.0 | 175.39 ms/window (tg 13.8) | **31.40 ms/window** (T 2.97, tg ~65-70) |
+| expert cache | 4,470 slots, 98.1 % hit | 4,203 slots (-6 %), 97.3-97.5 % hit |
+
+  It is a VRAM-for-wall-clock trade inside the machine's own accounting, not a quality trade: no numeric path
+  changes, drafts are still verified by the target, and the price is ~6 % of the expert cache.  **Shipped.**
+
+- **FIX1's concurrency curve, and what is left.**  Four independent ~131 K chains, words, budget 60 s, 600-token
+  turns, rounds ascending then descending (median of two rounds):
+
+| n | 1 | 2 | 3 | 4 |
+| --- | ---: | ---: | ---: | ---: |
+| FIX1 agg tok/s | 44.1 (66.1 / 22.1) | 81.8 (86.3 / 77.2) | 101.7 (105.5 / 97.8) | 70.1 (30.3 / 109.9) |
+
+  Healthy cells now reach **105-110 agg at four deep chains** (H.36's best tier-off cell was 115.8, its n=4 median
+  60.5), so the reserve fix plus `CC_PARK_GAIN` is worth roughly the difference at n=3/n=4.  What still collapses a
+  cell is the request boundary: the same boot logged **five** full cold re-prefills -
+  `prompt 130,2xx tokens = 0 reused + 130,2xx read in 36,360-67,308 ms` - and a 36-67 s cold prefill on a serial
+  feed is exactly what pulls 105.5 down to 30.3 and inflates a lone stream's own windows from 20 to 112 ms.
+
+- **Why a cold prefill happens at all with 48 GiB of cache free of the disk tier.**  The parked image of a 131 K
+  chain is ~2.12 GiB (`snapshot_bytes=2115849904`), and four chains were holding **24 parked entries** = 50.9 GiB
+  against the 49,152 MiB cap, with `evictions=` climbing to 80 by the end of the run.  The cache is not full of
+  conversations, it is full of **generations of the same four conversations** (~6 each): every park appends a new
+  entry and the superseded one is only dropped when the byte cap already binds.  Eviction is oldest-first, so the
+  entry that leaves is whichever chain's oldest generation - including, often enough, the copy a chain needs next
+  turn.  There is no per-conversation generation knob in the engine (`--conversation-cache-mib/-slots/
+  -min-tokens/-min-free-mib/--conversation-cache-park-gain` is the whole surface), so the lever is the slot cap.
+
+- **FIX5 (slots 32 -> 8) does not fix the collapses, and that is the useful part.**  Same protocol:
+
+| arm | n=1 | n=2 | n=3 | n=4 | mean of 8 cells |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FIX1 (slots 32, 50.9 GiB parked, evictions 80) | 44.1 | 81.8 | 101.7 | 70.1 | 74.4 |
+| FIX5 (slots 8, 17.0 GiB parked, evictions 64) | 62.9 | 86.7 | 66.6 | 73.7 | 72.5 |
+
+  Both arms are bimodal, two cells each, and the means are inside the box's +-27 % reproduction band: the slot
+  cap is not the lever, so `--conversation-cache-slots 32` stays shipped (the 11-17 relay test needs it).
+  What the two arms do agree on is the shape of a collapsed cell: `rows/group-step` unchanged at 1.68, ring step
+  up from 14.4-19.0 ms to **51.7-70.8 ms**, rows/s down from 109-116 to 23.9-32.5, `duty` 1.00 and engine CPU
+  *down* to 0.3-1.0 cores, and **zero** request summaries inside the cell.  Waiting, not working.
+
+- **The one mechanism that explains the residual variance: a cold deep prefill is a ring-wide tax.**  Of 75 deep
+  requests in the FIX5 boot, 6 came in cold (`= 0 reused`, 36.1-61.2 s each); four of those are the harness's own
+  session builds, and the remaining two land exactly on the two collapse cells.  While one 131 K cold prefill is
+  in flight, every group-step of every other stream costs 3.5-4.7x its healthy 15 ms, because the prefill's FLOPs
+  are on the same four cards and the shape is a serial feed (`one hand-off per window`, `4 groups of 1`).  That is
+  the same coupling the operator reports as "开并发反而变慢" and it is what H.33's ledger said when it found
+  "two 53 K cold reads concurrently took 54.4 s against 38.2 s serially (-30 % aggregate PP), 42 % of ticks with
+  exactly one card moving".  Slicing does not help: the work has to happen somewhere on those cards.  The lever is
+  scheduling - defer or pace the prefill while decode streams hold the ring (PP yields to TG, per the stated
+  priority) - and the candidate surface is admission ordering (`STRATA_ADMIT_SHORT_FIRST`, `ADMIT_MAX_WAIT_S`),
+  `STRATA_COALESCE_PREFILL` with its `COALESCE_MIN_REQS/BURST_MS` brakes, and `--prefill` chunk pacing.
+  **This is the named next attack; nothing in it is shipped today.**
+
+- **Not believed / queued.**  (a) The reserve value is priced on the 4-card shape; 6 cards leave less per card
+  behind (`--trim-stage-weights` there keeps ~11 GiB), so re-check the expert-cache hit rate after the next 6-card
+  boot before assuming 1536 is free there.  (b) `--mtp-head proxy --mtp-cum auto --spec 8` arrive through
+  `strata_control/drafting.py:FORK_MTP_FLAGS`, whose own docstring restricts them to "one request at a time, one
+  card's layers (**not a split**)"; they are live on our split.  Harmless once the reserve fits (thrash 0), but the
+  factory `--spec 6` arm was never A/B'd against them on this lane.  (c) `STRATA_SSD_GBPS` still misprices our
+  LVM `dm-2` as 0.45 GB/s SATA.  (d) `numa_slice_ranges` (`src/core/expert_source.cpp:184`) still splits every
+  expert blob mid-blob across the two islands.  (e) node 0 free drifted to 2.2 GiB during FIX1 with `majflt=0/s` -
+  not yet a cost, but the CC floor is measured against global `MemAvailable`, so it is node-blind by construction.
+
+### H.36 - where the deep-concurrency wall actually is: request boundaries, a 48:1 cold-tier write treadmill, and one arm that died of its own cure (11-23 13:4x-16:0x, 4-card, verification boots C/D/E1/F)
+
+- **What was asked.**  H.35 left two unpriced things: why the ring holds `rows/group-step ~1.7` at every
+  concurrency, and why single-stream deep tg inside one boot walks from ~68 down to ~30 while nothing on the
+  GPU changes.  Four arms, all same protocol (four independent ~131 K chains, words corpus, 3 rounds run
+  ascending then descending, every cell bracketed by engine-log byte offset).
+
+| arm | one variable | n=1 | n=2 | n=3 | n=4 | best cell | writes MB/s |
+| --- | --- | ---: | ---: | ---: | ---: | --- | ---: |
+| C | shipped base + cold tier ON + `park-gain 8192` | 34.9 | 76.7 | 87.8 | 91.7 | 100.6 (r1 n=3) | 416-1,265 |
+| D | cold tier **OFF** | 36.6 | 70.4 | **108.2** | 60.5 | **115.8** (r2 n=4) | ~0 |
+| E1 | tier off + CC 48 -> **16 GiB** | 67.7 | 87.8 | **23.7** | 36.3 | died of the cure | ~0 |
+| F | tier off, turns 600 -> 4,000 tokens | **void** | - | - | - | see H.37 | ~0 |
+
+- **The tier is a treadmill, measured in production, not in the harness.**  Boot-by-boot census over the
+  engine log (read-only, 40 boots with >=18 deep requests): saves 79-177 per boot writing **156-352 GiB**,
+  against **2-9 disk read-backs** per boot - a **40:1 write:read ratio**, on the same `nvme0n1` that holds the
+  expert pack.  Lifetime tier volume 8.53 TiB written / 6,640 s of pure write time / 22.5 % of saves only
+  rewrote a copy that the next turn dropped as superseded.  The `DECISIONS.md` 11-20 adoption priced the tier
+  at "16 x 148 K distinct chains resurrect in 6.9 s instead of 46 s"; that benefit is real but it is bought
+  ~5 times per boot, and the harness regime (four deep chains re-continued) pays 1.2-1.4 GB/s for it and loses
+  a third of its single-stream deep tg (C: 68.2 at wr 0 -> 29.9 at wr 1,265 MB/s).  Tier OFF is shipped on
+  this lane; the resurrection path stays one env line away (`DISK_DIR`), and the honest open question is
+  whether traffic with many distinct long sessions returning would want it back - it should then be priced
+  against its own device or a writer rate limit, neither of which the engine has.
+- **`--conversation-cache-park-gain 8192` is necessary but not sufficient, and the reason is instructive.**
+  Its guard is "the copy I would supersede is still held" (`park_held == 0` => park anyway).  At four deep
+  chains the cache runs at its byte cap (log: `parked=24 bytes=50.9 GB evictions=` climbing one per park),
+  so the copy it would supersede has already been evicted and the gate never closes.  Parking is cheap only
+  when the cache is not oversubscribed by near-duplicates - which is the same observation as 1Cat's
+  retention-default incident (`c5efe9f0a0`) from the other side: a *periodic* retention/eviction policy
+  evicts the state that the next request needs.
+- **E1 is the arm that killed itself: CC 16 GiB is below the working set, not below the noise.**  Four
+  ~131 K chains cost ~2.8 GiB of parked image each, so 16 GiB holds five - and with four streams plus
+  supersede churn the cache turns over every boundary.  n=3 fell to **23.7 agg / 7.9 per stream / 70.7 ms
+  group-step**, while node 8 sat with 50 GiB free.  So the 48 GiB cap is not "RAM that decode is missing":
+  free RAM did not buy speed, and shrinking the cache converts a park into a re-read.  Recorded as **rejected
+  with no ambiguity**, and it retires a plausible-looking inference (parked chains starving expert streaming)
+  that I had almost shipped.
+- **The wall is at boundaries, and it is two different losses.**  Same boot, same config (arm D): n=1 cells
+  gave `engine_tg` 72.0 / 64.4 / 33.0 ms against `agg_wall` 68.8 / 36.6 / 24.3.  Where `engine_tg` stayed
+  ~64 and the wall rate fell to 36.6, the loss is **between** requests: a 600-token turn at this depth ends,
+  parks (median 439 ms, max **7.16 s** per slot-park this run), and the next turn queues - so ~40 % of wall
+  is boundary.  Where `engine_tg` itself fell to 33 the windows really inflated (`mswin` 58 ms,
+  `group-step` 55.7 ms in the worst n=4 cell) - the boundary storms overlap and land on the ring.  Both
+  channels are host-side bookkeeping at the request boundary, neither is expert compute: `rows/group-step`
+  never left **1.69-1.71** in any arm, which is H.35's observation restated with four independent chains and
+  confirmed as a property of the `4 groups of 1` shape rather than of load.
+- **Arm F is retracted, and the reason is a separate mechanism found after it (H.37).**  Its first cell read
+  `engine_tg 7.95` at **1,495.92 ms/window** with T 4.21 and `node0 free 4.6 GiB`.  I was about to record that
+  as "deep-window verify is superlinear in tokens per window"; it is not.  The same boot emitted
+  `no VRAM for a new window graph` **6,655 times** and a window-graph capture costing **1,047 ms**, and after
+  one config line (the VRAM reserve) the identical long-turn probe sits at 31.40 ms/window.  Nothing about
+  4,000-token turns was ever measured, because the cell that looked like the cure was the disease.
+- **Not believed / queued.**  (a) The CC has no per-conversation generation retention, so `--conversation-cache-slots`
+  is a blunt proxy for it - re-priced in H.37, and if the traffic is >8 *distinct* deep sessions the 11-17 relay
+  test (which needed slots 32) has to be re-run against whatever ships.  (b) `STRATA_SSD_GBPS`: the engine reads
+  the device name and prices our LVM `dm-2` as 0.45 GB/s SATA, 5.5x off (engine `generate.cpp:1759`,
+  `prefill_plan.hpp:97`).  (c) The mid-blob NUMA split (`src/core/expert_source.cpp:184`) still puts half of
+  every expert blob on the far node by construction.  (d) Shape `4/2` on a tier-quiet lane was never re-run
+  to >=3 rounds, so H.32/H.35's shape verdicts stay inside their +-27% noise.  (e) `STRATA_PARK_ASYNC=1`.
+
 ### H.35 - the real deep-window concurrency curve, and the mechanism H.32 got wrong (11-23 11:0x-11:5x, 4-card, quiet lane)
 
 - **What this was.**  Two harnesses landed (`ac922/scripts/concscale.py` + `.sh`, `ac922/scripts/interf_attrib.py` + `.sh`, commit `f282d311f` plus three fixes), then a scale curve ran in the quiet window.  The curve answers a question H.32 answered with the wrong word: it called deep-window concurrency "capacity-bound".  It is not, and the consequence is a bigger prize than a knob.
