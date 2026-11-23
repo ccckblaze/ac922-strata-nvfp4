@@ -694,6 +694,41 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.32 - the lane's real deep-window concurrency curve, and a shape reversal I had to take back (11-23 07:4x-08:5x, 4-card)
+
+- **What this was.**  The operator reported the 4-card lane "nearly unusable" and watched one card (`GPU1`)
+  pinned while the other three idled.  This entry is the measurement of what the lane can actually carry, plus
+  the correction of a wrong conclusion I drew halfway through.
+- **The card that looked guilty is not guilty.**  `nvidia-smi` sampling showed physical GPU1 at 91 % SM with
+  GPU0/3/4 at 5-10 %, owned by our own engine pid.  GPU1 is engine CUDA1 = layers 9-23 = 15 of 48, the heaviest
+  stage; a pipelined line runs at its bottleneck stage's rate, so the picture is expected, not a fault.  The
+  sub-chunking that made it visible is the engine's own (`STRATA_SPLIT_PF_CHUNKS` default 8 -> "chunks of 2560
+  so the stages overlap").  The boot's earlier `verify 523/1209 ms/window` lines with every named sub-timer
+  ~4 ms are the same effect: window wall time waiting on the line, not on reach/host/CPU.
+- **Deep-window concurrency, ship shape (4/4, four INDEPENDENT sessions, 240 tokens each):**
+
+  | depth | n=1 | n=4 | n=5 |
+  | --- | ---: | ---: | ---: |
+  | 8K | - | **145.6** (36.4/stream) | - |
+  | 131K | - | **81.8** (20.4) | **63.8** (15.8, min 12.6) |
+  | 170K | 63.1 | **77.6** (19.3) | - |
+
+  Two facts to keep.  (1) Deep windows are capacity-bound: 4 streams at 170K give only **1.23x** the tokens/s of
+  one stream, so a session's share falls to ~31 % of solo speed - that is what "unusable" feels like with several
+  agents open, and no shape change creates capacity that is not there.  (2) **Over-subscription is negative**: the
+  5th stream costs the lane 22 % of its aggregate (81.8 -> 63.8) because only 4 slots exist, so the practical fix
+  is admission, not tuning: keep <= 4 in flight (`--max-queue` / config `max_queue`, `server.py:5242`, capacity =
+  batch + max_queue), which turns the 5th request into a short wait or a clean 503 instead of a 5-way slowdown.
+- **The reversal.**  Mid-entry I measured `4/4` at 53K x4 as **40.7** aggregate and `4/2` as 113.4, and patched
+  the launcher to 4/2.  That 40.7 was taken while the operator's own sessions were on the lane.  Re-measured
+  quietly with independent sessions: `4/4` beats `4/2` at both ends (8K 145.6 vs 121.0, 131K 81.8 vs 72.7) and
+  single streams are identical (53K 66.1 vs 65.9) - the 2026-11-21 sweep stands, and the patch was reverted to
+  `(4,4)` with the paired evidence recorded in its comment.
+- **Standing lesson (23).**  A contention measurement taken on a lane that carries live traffic is not a
+  measurement: same config, same protocol, 40.7 vs 145.6.  Either quiet the lane, or record the concurrent
+  request census (`thinking:` / `done:` lines in the serve log) beside every number and discard contaminated
+  samples instead of reasoning around them.
+
 ### H.31 - what "production is slow" actually was: one cold read holds the control lines (11-23 00:4x-01:3x, 4-card production)
 
 - **What this was.**  The operator saw single requests at 0.8-1.3 tok/s on the 4-card lane and moved traffic
@@ -1505,3 +1540,7 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     and compare the binary's mtime against the source you changed.  A degraded configure is repaired by a
     fresh configure into a new directory, then swapping the directories (lesson 20's practice) - not by
     reconfiguring the poisoned one.
+23. A contention measurement taken on a lane that carries live traffic is not a measurement.  Same config,
+    same protocol: 40.7 vs 145.6 tok/s aggregate, because the operator's own sessions were reading during the
+    first one.  Quiet the lane, or log the concurrent request census beside every number and throw the
+    contaminated samples away rather than explaining them.

@@ -750,3 +750,23 @@ shorter waiting one) never fired on this build: 0 engine-side `BYIELD`/`YIELDED`
 paired probes.  That is the difference between a 52 s wait and a one-chunk wait, and it is why `replicas`
 isolation still matters for mixed traffic even though it cannot raise cold-PP throughput.
 
+
+## Priced, decision pending: cap the running set at 4 slots (2026-11-23, 4 cards)
+
+The lane has `--batch 4` = four slots, so a 5th in-flight deep session does not add capacity - it costs it.
+Independent-session pairs (240 tokens each, DEVLOG H.32):
+
+| streams at 131K | aggregate tok/s | per-stream med |
+| --- | ---: | ---: |
+| 4 | **81.8** | 20.4 |
+| 5 | 63.8 (**-22 %**) | 15.8 (min 12.6) |
+
+And deep windows barely scale at all: one stream at 170K = 63.1 tok/s, four = 77.6 (**1.23x**), so each session
+gets ~31 % of solo speed.  That is the honest capacity of 4 cards, and it is why "several agents open" feels
+unusable regardless of tuning.
+
+**Options (both quality-neutral, neither applied yet).**
+1. Client side: keep <= 4 concurrent requests to this lane (the upstream limit is 5).
+2. Server side: `max_queue` (config key or `--max-queue`, `serve/server.py:5242`; capacity = batch + max_queue)
+   so the 5th+ request waits a bounded time or gets a clean 503/"retry later" instead of joining a full line.
+   Not adopted by default because it changes what the client sees (retries/503s) - operator's call.
