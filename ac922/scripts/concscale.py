@@ -46,6 +46,60 @@ GEN = re.compile(r"prompt (?P<ptok>\d+) tokens = (?P<reuse>\d+) reused \+ (?P<rd
                  r"(?P<drf>\d+)")
 KEY = os.environ.get("STRATA_API_KEY", "")
 OFF = {"start": 0}
+REPO = os.environ.get("REPO", "/data/work/ac922-strata-nvfp4")
+# A natural-text corpus for the measurement-validity check: random word lists are the worst case for
+# query-sparse attention (nothing to attend selectively to), so a deep window measured on them can be
+# slow for a reason that has nothing to do with the box.  The prose source is this repo's own
+# documentation - plain English text, no model output, read off disk.
+PROSE_SRC = [os.path.join(REPO, f) for f in
+             ("ac922/DEVLOG.md", "ac922/DECISIONS.md", "docs/NVFP4.md", "README.md")]
+
+
+def prose_pool():
+    chunks = []
+    for f in PROSE_SRC:
+        try:
+            txt = open(f, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        for para in re.split(r"\n\s*\n", txt):
+            para = " ".join(para.split())
+            if 40 < len(para) < 1200:
+                chunks.append(para)
+    return chunks
+
+
+def prose_text(n_chars, salt, pool):
+    v = zlib.crc32(salt.encode()) & 0x7FFFFFFF
+    out, total = [], 0
+    while total < n_chars:
+        v = (v * 1103515245 + 12345) & 0x7FFFFFFF
+        c = pool[v % len(pool)]
+        out.append(c)
+        total += len(c) + 1
+    return (" ".join(out))[:n_chars]
+
+
+def corpus_text(corpus, n_chars, salt, pool):
+    """Both arms are sized in CHARACTERS so a target token count maps to each the same way."""
+    if corpus == "prose":
+        return prose_text(n_chars, salt, pool)
+    return uniq_text(max(1, int(n_chars / 6.0)), salt)
+
+
+def probe_tokens_per_char(url, text):
+    """One cheap request, then read the engine's own token count for it back off the log."""
+    off = os.path.getsize(ENGINE)
+    plain(url, [{"role": "user", "content": text}])
+    time.sleep(0.7)
+    try:
+        with open(ENGINE, "rb") as f:
+            f.seek(off)
+            blob = f.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    hits = [int(m.group("ptok")) for m in GEN.finditer(blob)]
+    return (hits[-1] / float(len(text))) if hits else None
 
 
 def uniq_text(n, salt):
@@ -232,6 +286,10 @@ def main():
     ap.add_argument("--rounds", type=int, default=2)
     ap.add_argument("--port", default=os.environ.get("PORT", "8091"))
     ap.add_argument("--label", default=os.environ.get("LABEL", "shape"))
+    ap.add_argument("--corpus", default="words",
+                    help="comma list of words,prose - prose is the measurement-validity arm")
+    ap.add_argument("--target-tokens", type=int, default=0,
+                    help="size each session to this many prompt tokens via a calibration probe")
     a = ap.parse_args()
     if not KEY:
         raise SystemExit("STRATA_API_KEY missing - source /etc/profile.d/env.sh")
@@ -245,87 +303,124 @@ def main():
     print("label=%s boot shape: %s" % (a.label, sorted(set(shape))[-1][:120] if shape else "none"),
           flush=True)
 
-    sessions = []
-    for i in range(a.sessions):
-        text = uniq_text(a.deep_words, "cs2-%d-%d" % (os.getpid(), i))
-        w = plain(url, [{"role": "user", "content": text}])
-        sessions.append([{"role": "user", "content": text}, {"role": "assistant", "content": "ok"},
-                         {"role": "user", "content": KEEP}])
-        print("  session %d built wall=%.1f s" % (i, w), flush=True)
-
-    cells = []
-    ns = list(range(1, a.sessions + 1))
-    for rnd in range(1, a.rounds + 1):
-        for n in (ns if rnd % 2 else ns[::-1]):
-            boxes = [{"tokens": 0, "busy": 0.0, "spans": [], "iters": 0, "errors": 0,
-                      "last_err": ""} for _ in range(n)]
-            OFF["start"] = os.path.getsize(ENGINE)
-            drain()
-            n0 = row_count()
-            probe.open("r%d_n%d" % (rnd, n))
-            th = [threading.Thread(target=sustained,
-                                   args=(url, sessions[i], a.budget, a.token_cap, boxes[i]))
-                  for i in range(n)]
-            for t in th:
-                t.start()
-                time.sleep(0.05)
-            for t in th:
-                t.join()
-            probe.close("r%d_n%d" % (rnd, n))
-            drain()
-            rr = tail_rows(row_count() - n0)
-            rq = tail_req_lines(n * 4)
-
-            busy_rate = []
-            for b in boxes:
-                if b["busy"] > 1 and b["tokens"] > 20:
-                    busy_rate.append(b["tokens"] / b["busy"])
-            wall_rate = [b["tokens"] / max(1.0, b.get("t1", time.time()) - b.get("t0", time.time()))
-                         for b in boxes if b["tokens"] > 20]
-            cell = {"round": rnd, "n": n, "label": a.label,
-                    "iters": sum(b["iters"] for b in boxes),
-                    "errors": sum(b["errors"] for b in boxes),
-                    "tokens_total": sum(b["tokens"] for b in boxes),
-                    "tg_busy_per_stream": round(med(busy_rate), 2),
-                    "agg_busy": round(sum(busy_rate), 2),
-                    "tg_wall_per_stream": round(med(wall_rate), 2),
-                    "agg_wall": round(sum(wall_rate), 2),
-                    "duty": round(sum(b["busy"] for b in boxes) /
-                                  max(1.0, sum(max(1.0, b.get("t1", 1) - b.get("t0", 0))
-                                               for b in boxes)), 3),
-                    "n_req_lines": len(rq), "n_rows": len(rr),
-                    "mswin": round(med([r.get("mswin") for r in rr]), 2),
-                    "tpw": round(med([r.get("tpw") for r in rr]), 2),
-                    "verify": round(med([r.get("verify") for r in rr]), 2),
-                    "gpu_reach": round(med([r.get("gpu_reach") for r in rr]), 2),
-                    "cpu": round(med([r.get("cpu") for r in rr]), 2),
-                    "host": round(med([r.get("host") for r in rr]), 2),
-                    "restore_ms": round(med([float(d["rdms"]) for d in rq]), 1),
-                    "engine_tg": round(med([float(d["tg"]) for d in rq]), 2),
-                    "acc": round(med([int(d["acc"]) / max(1, int(d["drf"])) for d in rq]), 3)}
-            cell.update(probe.report("r%d_n%d" % (rnd, n)))
-            cells.append(cell)
-            print(json.dumps(cell, sort_keys=True), flush=True)
-            with open(OUT, "a") as f:
-                f.write(json.dumps(cell) + "\n")
-
-    print("\nscaling curve label=%s: %-3s %9s %9s %9s %9s %8s %8s %8s %8s %8s %7s" % (
-        a.label, "n", "agg_wall", "agg_busy", "tg_wall", "tg_busy", "mswin", "tpw", "reach",
-        "cpu", "restore", "duty"), flush=True)
-    for n in ns:
-        sel = [c for c in cells if c["n"] == n]
-        if not sel:
+    pool = prose_pool()
+    all_cells = []
+    for corpus in [c.strip() for c in a.corpus.split(",") if c.strip()]:
+        if corpus == "prose" and not pool:
+            print("  prose: no readable documentation corpus on this host, arm skipped", flush=True)
             continue
-        print("%-4d %8.1f %9.1f %9.2f %9.2f %8.1f %8.2f %8.2f %8.2f %8.0f %7.2f" % (
-            n, med([c["agg_wall"] for c in sel]), med([c["agg_busy"] for c in sel]),
-            med([c["tg_wall_per_stream"] for c in sel]), med([c["tg_busy_per_stream"] for c in sel]),
-            med([c["mswin"] for c in sel]), med([c["tpw"] for c in sel]),
-            med([c["gpu_reach"] for c in sel]), med([c["cpu"] for c in sel]),
-            med([c["restore_ms"] for c in sel]), med([c["duty"] for c in sel])), flush=True)
-    base = med([c["agg_wall"] for c in cells if c["n"] == 1])
-    print("\nagg_wall(n)/agg_wall(1): " + " ".join("n=%d %.2fx" % (
-        n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base) if base == base and base else
-        "na" for n in ns), flush=True)
+        sessions = []
+        for i in range(a.sessions):
+            salt = "cs3-%d-%d-%s" % (os.getpid(), i, corpus)
+            chars = int(a.deep_words * 6.0)
+            if a.target_tokens:
+                r = probe_tokens_per_char(url, corpus_text(corpus, 20000, salt + "-probe", pool))
+                if r:
+                    chars = int(a.target_tokens / r)
+                    print("  %s calibrated %.5f tokens/char -> %d chars for %d tokens" % (
+                        corpus, r, chars, a.target_tokens), flush=True)
+                else:
+                    print("  %s: probe returned no token count, using %d chars" % (corpus, chars),
+                          flush=True)
+            text = corpus_text(corpus, chars, salt, pool)
+            w = plain(url, [{"role": "user", "content": text}])
+            sessions.append([{"role": "user", "content": text},
+                             {"role": "assistant", "content": "ok"},
+                             {"role": "user", "content": KEEP}])
+            print("  %s session %d built wall=%.1f s chars=%d" % (corpus, i, w, len(text)), flush=True)
+
+        cells = []
+        ns = list(range(1, a.sessions + 1))
+        for rnd in range(1, a.rounds + 1):
+            for n in (ns if rnd % 2 else ns[::-1]):
+                boxes = [{"tokens": 0, "busy": 0.0, "spans": [], "iters": 0, "errors": 0,
+                          "last_err": ""} for _ in range(n)]
+                OFF["start"] = os.path.getsize(ENGINE)
+                drain()
+                n0 = row_count()
+                probe.open("c%s_r%d_n%d" % (corpus, rnd, n))
+                th = [threading.Thread(target=sustained,
+                                       args=(url, sessions[i], a.budget, a.token_cap, boxes[i]))
+                      for i in range(n)]
+                for t in th:
+                    t.start()
+                    time.sleep(0.05)
+                for t in th:
+                    t.join()
+                probe.close("c%s_r%d_n%d" % (corpus, rnd, n))
+                drain()
+                rr = tail_rows(row_count() - n0)
+                rq = tail_req_lines(n * 6)
+
+                busy_rate, wall_rate = [], []
+                for b in boxes:
+                    life = max(1.0, b.get("t1", time.time()) - b.get("t0", time.time()))
+                    if b["tokens"] > 20:
+                        if b["busy"] > 1:
+                            busy_rate.append(b["tokens"] / b["busy"])
+                        wall_rate.append(b["tokens"] / life)
+                cell = {"corpus": corpus, "round": rnd, "n": n, "label": a.label,
+                        "iters": sum(b["iters"] for b in boxes),
+                        "errors": sum(b["errors"] for b in boxes),
+                        "last_err": next((b["last_err"] for b in boxes if b["last_err"]), ""),
+                        "tokens_total": sum(b["tokens"] for b in boxes),
+                        "tg_busy": round(med(busy_rate), 2), "agg_busy": round(sum(busy_rate), 2),
+                        "tg_wall": round(med(wall_rate), 2), "agg_wall": round(sum(wall_rate), 2),
+                        "duty": round(sum(b["busy"] for b in boxes) /
+                                      max(1.0, sum(max(1.0, b.get("t1", 1) - b.get("t0", 0))
+                                                   for b in boxes)), 3),
+                        "n_req_lines": len(rq), "n_rows": len(rr),
+                        "mswin": round(med([r.get("mswin") for r in rr]), 2),
+                        "tpw": round(med([r.get("tpw") for r in rr]), 2),
+                        "verify": round(med([r.get("verify") for r in rr]), 2),
+                        "gpu_reach": round(med([r.get("gpu_reach") for r in rr]), 2),
+                        "cpu": round(med([r.get("cpu") for r in rr]), 2),
+                        "host": round(med([r.get("host") for r in rr]), 2),
+                        "restore_ms": round(med([float(d["rdms"]) for d in rq]), 1),
+                        "engine_tg": round(med([float(d["tg"]) for d in rq]), 2),
+                        "acc": round(med([int(d["acc"]) / max(1, int(d["drf"])) for d in rq]), 3),
+                        "ptok": int(float(rq[-1]["ptok"])) if rq else 0}
+                cell.update(probe.report("c%s_r%d_n%d" % (corpus, rnd, n)))
+                cells.append(cell)
+                all_cells.append(cell)
+                print(json.dumps(cell, sort_keys=True), flush=True)
+                with open(OUT, "a") as f:
+                    f.write(json.dumps(cell) + "\n")
+
+        print("\ncurve for corpus=%s: %-3s %9s %9s %9s %9s %8s %8s %8s %8s %8s %7s %6s" % (
+            corpus, "n", "agg_wall", "agg_busy", "tg_wall", "tg_busy", "mswin", "tpw", "reach",
+            "cpu", "restore", "duty", "err"), flush=True)
+        for n in ns:
+            sel = [c for c in cells if c["n"] == n]
+            if not sel:
+                continue
+            print("%-4d %8.1f %9.1f %9.2f %9.2f %8.1f %8.2f %8.2f %8.2f %8.0f %7.2f %6d" % (
+                n, med([c["agg_wall"] for c in sel]), med([c["agg_busy"] for c in sel]),
+                med([c["tg_wall"] for c in sel]), med([c["tg_busy"] for c in sel]),
+                med([c["mswin"] for c in sel]), med([c["tpw"] for c in sel]),
+                med([c["gpu_reach"] for c in sel]), med([c["cpu"] for c in sel]),
+                med([c["restore_ms"] for c in sel]), med([c["duty"] for c in sel]),
+                sum(c["errors"] for c in sel)), flush=True)
+        base = med([c["agg_wall"] for c in cells if c["n"] == 1])
+        print("agg_wall(n)/agg_wall(1): " + " ".join(
+            "n=%d %.2fx" % (n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base)
+            if base and base == base else "na" for n in ns), flush=True)
+
+    if len(all_cells) and len(set(c["corpus"] for c in all_cells)) > 1:
+        print("\ncorpus validity at equal n (prose vs words, same depth):", flush=True)
+        for n in sorted(set(c["n"] for c in all_cells)):
+            g = {}
+            for corpus in sorted(set(c["corpus"] for c in all_cells)):
+                sel = [c for c in all_cells if c["n"] == n and c["corpus"] == corpus]
+                if sel:
+                    g[corpus] = (med([c["tg_wall"] for c in sel]), med([c["mswin"] for c in sel]),
+                                 med([c["agg_wall"] for c in sel]))
+            if len(g) == 2:
+                (wt, wm, wa), (pt, pm, pa) = g["words"], g["prose"]
+                print("  n=%d words tg %.2f mswin %.1f agg %.1f | prose tg %.2f mswin %.1f "
+                      "agg %.1f | prose/words tg x%.2f" % (n, wt, wm, wa, pt, pm, pa,
+                                                            (pt / wt) if wt else float("nan")),
+                      flush=True)
     print("DONE", flush=True)
 
 
