@@ -19,6 +19,9 @@ they route to most experts the way real code and tool output do; a joiner never 
 conversation cache would turn it into a warm read). `--determinism` instead sends fixed greedy prompts and prints the
 SHA-256 of each answer (to compare two builds' output tokens).
 
+Authentication follows the lane: `--key` wins, else $STRATA_API_KEY, else /data/work/lane.key (a serve with no key
+ignores the header).
+
   python tools/piped_read_join_bench.py --port 8080 --out join.json
   python tools/piped_read_join_bench.py --port 8080 --scenarios two_joiners,followup --repeat 3
   python tools/piped_read_join_bench.py --port 8080 --determinism
@@ -33,6 +36,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+HEADERS = {}
 CODING = ["Write a Python function that parses an INI file into nested dicts, with tests. Explain each step.",
           "Implement a thread-safe LRU cache in C++ with a short explanation of the design and its complexity.",
           "Explain, with code, how to stream a large CSV file in Go and aggregate per-key statistics.",
@@ -75,7 +79,8 @@ def stream(port, raw, timeout=1800):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     ts, text, usage = [], [], None
     t0 = time.monotonic()
-    c.request("POST", "/v1/chat/completions", raw, {"Content-Type": "application/json", "Connection": "close"})
+    c.request("POST", "/v1/chat/completions", raw,
+              {"Content-Type": "application/json", "Connection": "close", **HEADERS})
     r = c.getresponse()
     if r.status != 200:
         raise RuntimeError("HTTP %d" % r.status)
@@ -191,8 +196,14 @@ def main():
     ap.add_argument("--repeat", type=int, default=1, help="runs of each scenario (each with its own cold prompts)")
     ap.add_argument("--out")
     ap.add_argument("--determinism", action="store_true")
+    ap.add_argument("--key", default=None, help="API key: default $STRATA_API_KEY, then /data/work/lane.key")
     a = ap.parse_args()
     tag = time.strftime("%H%M%S")
+    key = a.key or os.environ.get("STRATA_API_KEY")
+    if not key and Path("/data/work/lane.key").exists():
+        key = Path("/data/work/lane.key").read_text().strip()
+    if key:
+        HEADERS["Authorization"] = "Bearer " + key
     if a.model is None:
         c = http.client.HTTPConnection("127.0.0.1", a.port, timeout=30)
         c.request("GET", "/v1/models")
