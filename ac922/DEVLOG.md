@@ -739,6 +739,30 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   is a code change on the dev lane: cut at expert-slot (block) boundaries with a per-node weight instead of mid-blob
   halves, so a card's expert range lives on its own node.  That is the standing weighted-slice ticket, now with a named
   function, a mechanism and an expected metric (per-card remote-read share, the placement gate passing).
+- **Design sketch for that ticket, so the evening window starts coding instead of deciding.**  The split is
+  between two *touchers*, but the reader is a specific card, so the unit that should be indivisible is the
+  slot (one expert blob of one layer), and the key is the layer's owning GPU: `init()`
+  (`NumaComplementPlacement`, `src/core/expert_source.cpp:629`) already walks slots in layer order, so a
+  layer -> GPU -> node map replaces the `role_bytes[r] / 2` cut with `slice(slot) = node_of(the card that
+  reads it)`.  The map is already on this host, measured 11-23 while drafting this: the six V100s'
+  `/sys/bus/pci/devices/*/numa_node` reads **0** for `0004:04/05/06:00.0` (physical cards 0,1,2) and **8** for
+  `0035:03/04/05:00.0` (cards 3,4,5) - the kernel resolves a card to the *populated* node of its island, so
+  `cpu::card_node_pci_node` (`src/kernels/cpu/card_node_test.cpp:262`) is the whole lookup and no distance
+  tie-break is needed.  (The memoryless per-GPU nodes 250-255 that `src/core/expert_source.cpp:549` warns about
+  sit at distance 80 from *both* node 0 and node 8, so if a device ever reports one of those ids the tie must
+  fall back to the plan's own node order rather than the distance row.)  On the ship lane this is clean
+  arithmetic, not a heuristic: CUDA0+CUDA1 = layers 0-23 are read by node-0 cards and CUDA2+CUDA3 = layers
+  24-47 by node-8 cards, so whole-slot assignment wants exactly half the complement per node, and the
+  free-RAM gate at `sample_free`/`pin_step_fits` sets the weight - with node 0 down to 2.19 GiB free against
+  node 8's 68.67 GiB, the spill is where the weight will actually land.  The bound is what makes it worth an
+  evening: today every slot pays 50 % remote *always*, after the change a slot pays remote only if it spilled,
+  so remote bytes strictly fall for any spill share under 1, and both halves of a blob are read by the same card
+  in the same step, which is why a mid-blob cut is pure loss and why the placement gate can report 91 % and
+  still be wrong.  Keep `numa_slice_ranges` byte-for-byte for the `1/2` weights the flag-off path uses
+  (the default must stay identical), give it a weight argument, and extend `test_numa_slice_ranges`
+  (`tests/core/file_expert_source_test.cpp:435`) with the page-coverage invariants for weights other than
+  `1/2` and for whole-slot assignment.  The first metric is not throughput: it is the placement line passing
+  `>= 95 %` and the per-card remote-read share falling, then PP/tg against a same-boot paired control.
 - **Not forgotten (and not believed either).**  At 53K the rebalance arm looked *better*: 17.2 + 17.5 s serial against
   19.1 + 19.1 s, and the concurrency penalty fell 1.42x -> 1.06x.  The shipped arm's 53K pair ran while the lane was
   flushing 48 GiB of idle conversation saves to disk, so the two arms are not paired at that depth.  Anyone who wants the
