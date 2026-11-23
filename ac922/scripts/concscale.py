@@ -556,10 +556,15 @@ def main():
                 sum(c["errors"] for c in sel)), flush=True)
             ring = [c for c in sel if c.get("cen_rows_step")]
             if ring:
+                # cen_shape is a string and cen_step_ms can be None when a cell had no ring census, so
+                # the generic median is wrong for both (it crashed the summary of a finished run).
+                shape = max(set(c["cen_shape"] for c in ring),
+                            key=lambda s: sum(c["cen_shape"] == s for c in ring))
                 print("     ring %s  shape=%s step=%s ms  rows/step=%s  rows/s=%s  "
                       "mtp_keep=%s  per-slot=%s tok/s  (engine census, %s lines)" % (
-                    "n=%-2d" % n, med([c["cen_shape"] for c in ring]),
-                    med([c["cen_step_ms"] for c in ring]), med([c["cen_rows_step"] for c in ring]),
+                    "n=%-2d" % n, shape,
+                    med([c["cen_step_ms"] for c in ring if c.get("cen_step_ms") is not None]),
+                    med([c["cen_rows_step"] for c in ring]),
                     med([c["cen_rows_s"] for c in ring]), med([c["cen_mtp_keep"] for c in ring]),
                     med([c["agg_wall"] for c in ring]) / n,
                     int(sum(c["cen_lines"] for c in ring))), flush=True)
