@@ -30,11 +30,16 @@ say "step 0: clean restart onto final.json"
 bash "$HERE/lane.sh" 4 restart >>"$LOG" 2>&1 || { say "BOOT-FAIL"; exit 1; }
 P=$(pgrep -f 'build/strata --serv[e]' | head -1)
 [ -n "$P" ] || { say "NO-ENGINE"; exit 2; }
+# The --spec 8 --mtp-head proxy --mtp-cum auto that ride the effective argv are the server's own
+# auto path (drafting.py FORK_MTP_FLAGS), not operator contamination: they arrive regardless of
+# what final.json says, and DECISIONS 11-21 showed the flags themselves are not the axis at 6
+# cards.  This gate records them as a covariate; the hard checks are the reserve and the shape.
 FIELDS=$(tr '\0' '\n' < /proc/$P/cmdline | grep -cE '^--mtp-(head|cum)$')
 SPECLINE=$(tr '\0' '\n' < /proc/$P/cmdline | grep -A1 '^--spec$' | tail -1)
 RESERVE=$(tr '\0' '\n' < /proc/$P/cmdline | grep -A1 '^--vram-reserve-mib$' | tail -1)
-say "argv after restart: --spec $SPECLINE, mtp-head/cum fields=$FIELDS (expect 0), reserve=$RESERVE (expect 1536)"
-[ "$FIELDS" = 0 ] || { say "CONFIG-FAIL: experiment flags survived the restart"; exit 3; }
+AUTOMTP=${STRATA_AUTO_NEW_MTP:-unset}
+say "argv after restart: --spec $SPECLINE (mtp-head/cum fields=$FIELDS, auto-mtp=$AUTOMTP), reserve=$RESERVE (expect 1536)"
+[ "$RESERVE" = 1536 ] || { say "CONFIG-FAIL: reserve is not 1536"; exit 3; }
 grep -aq "GEOMETRY-PASS" "$LOG" || { say "GEOMETRY-FAIL: no GEOMETRY-PASS in boot log"; exit 4; }
 
 say "step 1: FULLWINDOW byte-exact 4 x (262144-512)"

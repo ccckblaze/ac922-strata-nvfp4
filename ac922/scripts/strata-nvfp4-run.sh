@@ -291,7 +291,13 @@ json.dump(c,open(out,"w")); print("batch=",batch)
 PY
   # >>> AC922 adopted env (DECISIONS.md: PLE park) >>>
   if [ -x "$PLE_PARK" ]; then PLE_SPLIT="${PLE_SPLIT:-500}" "$PLE_PARK" "${PLE_SPLIT:-500}" || true; fi
-  # <<< AC922 adopted env <<<
+  # >>> AC922 adopted env (H.35(b): factory draft arm) >>>
+  # STRATA_AUTO_NEW_MTP=0 makes serve.server leave the factory --spec 6/--spec-min-p alone; unset
+  # keeps the 0.2.15 auto path, which rides --spec 8 --mtp-head proxy --mtp-cum auto even on a
+  # split, although drafting.py's own docstring restricts those flags to "one request at a time,
+  # not a split".  The A/B is this lane's first honest measurement of that question.
+  if [ -n "${STRATA_AUTO_NEW_MTP:-}" ]; then export STRATA_AUTO_NEW_MTP; fi
+  # <<< AC922 adopted env (factory draft arm) <<<
   ( cd "$SRC" && setsid /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port 8091 >"$LOG" 2>&1 & echo $! > "$PIDF" )
   echo "started pid $(cat $PIDF)"
 }
