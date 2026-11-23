@@ -207,7 +207,7 @@ def main():
         HEADERS["Authorization"] = "Bearer " + key
     if a.model is None:
         c = http.client.HTTPConnection("127.0.0.1", a.port, timeout=30)
-        c.request("GET", "/v1/models")
+        c.request("GET", "/v1/models", None, HEADERS)
         a.model = json.loads(c.getresponse().read())["data"][0]["id"]
         c.close()
     if a.determinism:
