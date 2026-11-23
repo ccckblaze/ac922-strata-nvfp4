@@ -19,6 +19,11 @@ in which the streams decode undisturbed:
   I2 ~= I1 >> CTL        -> host-CPU-bound: the --pool-cores / STRATA_POOL_SPIN_US family
   I2 in between          -> both; price each by how much of I1's damage survives into I2
 
+Read the columns this way: `interf_wall`, `tg_in_span`, `agg_in_span`, `iowait_pct`, `rd_MBps` and the
+`io` block are all measured on real time and are the verdict's weight; `cpu`, `mswin`, `verify` and
+`gpu_reach` summarise whole requests that happened to finish inside the cell, so they place the
+population, they do not scope it to the span.
+
 Two honest limits.  Residency warms monotonically inside a round, so a later arm can inherit a fitter
 engine than an earlier one: the parity rotation makes that show up as disagreement between orderings
 rather than as an arm effect, and round 1 is reported separately.  And the engine's per-request line
@@ -89,9 +94,12 @@ def streamed(url, messages, max_tokens, stamps):
 
 
 def cpu_sample():
+    # /proc/stat cpu row: user nice system idle iowait irq softirq steal.  Field 3 is idle, NOT system;
+    # the first version of this sampler put it in `sys` and reported ~95 % "system" on an idle box.
     with open("/proc/stat") as f:
         v = [int(x) for x in f.readline().split()[1:9]]
-    return {"user": v[0] + v[1], "sys": v[2] + v[3] + v[4] + v[5], "iowait": v[6], "total": sum(v)}
+    return {"user": v[0] + v[1], "sys": v[2] + v[5] + v[6], "iowait": v[4], "idle": v[3],
+            "total": sum(v)}
 
 
 def disk_sample():
@@ -137,13 +145,15 @@ class Sampler(threading.Thread):
             return {}
         first, last = span["pts"][0], span["pts"][-1]
         secs = max(1.0, last[0] - span["t0"])
-        dc = {k: max(0, last[1][k] - span["c"][k]) for k in ("user", "sys", "iowait", "total")}
+        dc = {k: max(0, last[1][k] - span["c"][k]) for k in
+              ("user", "sys", "iowait", "idle", "total")}
         dd = {k: max(0, last[2][k] - span["d"][k]) for k in ("rs", "rsec", "wsec")}
         tot = max(1, dc["total"])
         return {"span_s": round(secs, 1),
                 "cpu_pct": round(100.0 * (dc["user"] + dc["sys"]) / tot, 1),
                 "sys_pct": round(100.0 * dc["sys"] / tot, 1),
                 "iowait_pct": round(100.0 * dc["iowait"] / tot, 1),
+                "idle_pct": round(100.0 * dc["idle"] / tot, 1),
                 "rd_MBps": round(dd["rsec"] * 512.0 / 2 ** 20 / secs, 1),
                 "rd_iops": round(dd["rs"] / secs, 1)}
 
@@ -167,20 +177,29 @@ def drainer(stop):
         stop.wait(1.0)
 
 
-def rows_between(a, b):
-    out = []
+def row_count():
+    try:
+        with open(ROWS) as f:
+            return sum(1 for _ in f)
+    except FileNotFoundError:
+        return 0
+
+
+def tail_rows(n):
+    """The n rows the last drain appended.
+
+    NOT a timestamp filter.  A `strata decode timing:` line summarises a whole request and is written
+    when that request finishes, and the watcher stamps it with the drain time because the engine's log
+    lines carry no clock - so selecting rows by a span silently selects the wrong population (the first
+    version of this tool did, and reported 5 rows for an 80 s span).  Rows are taken by drain delta and
+    the interference span is measured on the token stream instead, which is real time by construction."""
+    if n <= 0:
+        return []
     try:
         with open(ROWS, errors="ignore") as f:
-            for ln in f:
-                try:
-                    r = json.loads(ln)
-                except Exception:
-                    continue
-                if a - 2 <= r.get("ts", 0) <= b + 2 and 0 < r.get("mswin", 0) < 60000:
-                    out.append(r)
-    except FileNotFoundError:
-        pass
-    return out
+            return [json.loads(l) for l in f.readlines()[-n:]]
+    except Exception:
+        return []
 
 
 def med(rows, k):
@@ -267,6 +286,8 @@ def main():
             time.sleep(a.settle)
 
             log_off = os.path.getsize(ENGINE)
+            drain()
+            rows0 = row_count()
             span = "r%d-%s" % (rnd, label)
             sampler.open_span(span)
             req_line = io_line = None
@@ -285,7 +306,7 @@ def main():
                 th[i].join()
             drain()
 
-            rr = rows_between(t0, t1)
+            rr = [r for r in tail_rows(row_count() - rows0) if 0 < r.get("mswin", 0) < 60000]
             inside = []
             for stamps in res:
                 if not stamps:
@@ -297,6 +318,7 @@ def main():
             cell = {"round": rnd, "arm": label, "n_rows": len(rr),
                     "cpu": round(med(rr, "cpu"), 2), "mswin": round(med(rr, "mswin"), 2),
                     "gpu_reach": round(med(rr, "gpu_reach"), 2),
+                    "row_attribution": "drain-delta",
                     "verify": round(med(rr, "verify"), 2),
                     "host": round(med(rr, "host"), 2),
                     "tg_in_span": round(st.median(inside), 2) if inside else 0.0,
