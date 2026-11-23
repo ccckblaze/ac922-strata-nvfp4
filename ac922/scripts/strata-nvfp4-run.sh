@@ -252,6 +252,14 @@ if os.environ.get("DISK_DIR"):
     if os.environ.get("DISK_SYNC"): setflag("--conversation-disk-sync-s",os.environ["DISK_SYNC"])
     if os.environ.get("DISK_PERSIST"): boolflag("--conversation-disk-persist")
 if os.environ.get("CC_MIN_TOKENS"): setflag("--conversation-cache-min-tokens",os.environ["CC_MIN_TOKENS"])
+# serve-level request defaults (not engine flags): REASONING_BUDGET lands in the run config, where
+# serve/runconfig.py reads "reasoning_budget_tokens" and caps every request's thinking (#123).  At the
+# 262K ceiling the shipped clients ask for <=512 output tokens, and an uncapped thinking reply eats the
+# whole budget and returns nothing ("the reply reached max tokens while still thinking") - observed as
+# the 19:52-19:54 retry loop, one 1-token generation every ~16 s, no answer, no traffic served.
+if os.environ.get("REASONING_BUDGET"):
+    c["reasoning_budget_tokens"] = int(os.environ["REASONING_BUDGET"])
+    print("reasoning budget:", os.environ["REASONING_BUDGET"])
 # CC_PARK_GAIN=N parks a conversation only after it advanced N tokens past the copy it would supersede
 # (engine default 0 = park every turn).  With 0, every turn of a long conversation pays a whole-snapshot
 # copy that the next turn drops as superseded: measured 2026-11-23 on four ~131 K conversations, 2,017 MiB
