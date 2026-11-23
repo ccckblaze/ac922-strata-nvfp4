@@ -281,6 +281,42 @@ def tail_req_lines(n):
     return [d for d in found if int(d["gen"]) >= 20][-n:]
 
 
+def tail_prefill():
+    """The prompt side of this cell's byte range, which is what actually explains a collapsed decode cell.
+
+    `agg_wall` counts only decode tokens, so while a cold 131 K read is in flight the ring is busy - the
+    work just is not visible to that metric.  Measured 2026-11-23: a collapsed cell read 23.9 agg and
+    24 rows/s against a healthy 115 rows/s, i.e. the decode kept about 21 % of the GPU and the prompt took
+    the rest, which is a FLOP budget, not a scheduling fault.  Every verdict about "concurrency is slower"
+    has to be read together with these numbers.
+
+    Only *completed* requests print a summary line, so a read still running when the cell ends is
+    under-counted here; that biases pf_frac low, never high.
+    """
+    try:
+        with open(ENGINE, "rb") as f:
+            f.seek(OFF["start"])
+            blob = f.read().decode("utf-8", "replace")
+    except Exception:
+        return {}
+    cold_tok = cold_ms = warm_ms = 0
+    cold_reads = warm_reads = 0
+    for m in GEN.finditer(blob):
+        d = m.groupdict()
+        pt, reu, rd, ms = (int(d[k].replace(",", "")) for k in ("ptok", "reuse", "rd", "rdms"))
+        if pt < 50000:
+            continue
+        if reu == 0:
+            cold_tok += rd
+            cold_ms += ms
+            cold_reads += 1
+        else:
+            warm_ms += ms
+            warm_reads += 1
+    return {"pf_cold_reads": cold_reads, "pf_cold_tok": cold_tok, "pf_cold_ms": cold_ms,
+            "pf_warm_reads": warm_reads, "pf_warm_ms": warm_ms}
+
+
 def med(vals):
     vals = [v for v in vals if v is not None]
     return st.median(vals) if vals else float("nan")
@@ -534,6 +570,9 @@ def main():
                 cell.update(cell_covariates(s0, s1, max(0.001, twall1 - twall0)))
                 cell.update(probe.report("c%s_r%d_n%d" % (corpus, rnd, n)))
                 cell.update(tail_census())
+                cell.update(tail_prefill())
+                if cell.get("pf_cold_ms"):
+                    cell["pf_frac"] = round(cell["pf_cold_ms"] / 1000.0 / max(1.0, cell.get("span_s", 1.0)), 2)
                 cells.append(cell)
                 all_cells.append(cell)
                 print(json.dumps(cell, sort_keys=True), flush=True)
@@ -577,6 +616,17 @@ def main():
                     med([c["majflt_s"] for c in fc]), med([c["cached_gib"] for c in fc]),
                     med([c["node0_free_gib"] for c in fc]), med([c["node8_free_gib"] for c in fc]),
                     med([c["load1"] for c in fc])), flush=True)
+            pf = [c for c in sel if "pf_cold_reads" in c]
+            if pf:
+                # A collapsed agg cell with pf_frac near 1 is the ring doing prompt work, not losing it.
+                print("     prompt side %s  cold reads=%d (max %s ms)  cold tok=%s  pf_frac med=%s max=%s "
+                      "  warm reads=%d warm ms med=%s" % (
+                    "n=%-2d" % n, sum(c["pf_cold_reads"] for c in pf),
+                    max([c["pf_cold_ms"] for c in pf]) if pf else 0,
+                    sum(c["pf_cold_tok"] for c in pf),
+                    med([c.get("pf_frac", 0.0) for c in pf]),
+                    max([c.get("pf_frac", 0.0) for c in pf]),
+                    sum(c["pf_warm_reads"] for c in pf), med([c["pf_warm_ms"] for c in pf])), flush=True)
         base = med([c["agg_wall"] for c in cells if c["n"] == 1])
         print("agg_wall(n)/agg_wall(1): " + " ".join(
             "n=%d %.2fx" % (n, med([c["agg_wall"] for c in cells if c["n"] == n]) / base)
