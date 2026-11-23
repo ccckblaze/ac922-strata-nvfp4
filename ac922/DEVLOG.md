@@ -694,6 +694,58 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   deleted.
 
 ## Deferred to an evening window (operator uses the box by day)
+### H.33 - the per-card work census: what "one card pinned, three watching" is, and a rebalance that bought nothing (11-23 09:1x-09:5x, 4-card)
+
+- **What this was.**  The operator watched `GPU1` at 91 % SM load with the other three at 5-10 % and asked whether the
+  four cards' compute is pooled at all.  Two things had to be separated: a *structural* property of a layer split
+  (nothing to fix) and a *load imbalance* (possibly fixable).  Both boots were measured with a 200 ms sampler over
+  `utilization.gpu`, `power.draw` and `clocks.sm` (`/tmp/mix2.py` + `/tmp/mix2sum.py`, nonce `q4` = shipped geometry,
+  `b1` = the rebalance arm), on a lane confirmed idle (load 0.02) before each phase.
+- **Structural, first, so it is on the record.**  A split is a pipeline, not a pool: the boot says
+  `layers 0-8 (CUDA0), 9-23 (CUDA1), 24-36 (CUDA2), 37-47 (CUDA3), one hand-off per window`, each card holds only its own
+  layers' dense weights (`--trim-stage-weights`), and the only cross-card expert tier the engine has (`--peer-device`) is
+  explicitly incompatible with `--layer-split`.  In decode a token traverses the four stages in order, so window time is
+  their *sum*: moving layers cannot shorten it.  4 -> 6 cards buying +7.5 % was the same fact.
+- **`utilization.gpu` is residency, not work.**  In 4-way decode at 131K all four cards look busy - 78-85 % of ticks -
+  while their mean util is 22-38 % and they draw 69-73 W against a 54 W idle floor on a 300 W card.  The whole box spends
+  ~284 W to serve 79.2 tok/s.  Decode is bound by hand-offs and GPU-reach waits, not by FLOPs, which is why no card ever
+  looks saturated *and* why saturating one would not help.
+- **Cold prefill is where the asymmetry is real.**  Steady 131K prefill: busy 51 / 81 / 70 / 58 % for 9 / 15 / 13 / 11
+  layers - a uniform 5.4-5.7 %/layer, so the only imbalance is that CUDA1 was handed the most layers - and the power
+  census says CUDA0 is barely computing at all (71 W) while the other three sit at 195-210 W.
+- **The arm.**  `STRATA_LAYER_SPLIT=13,25,37` (13/12/12/11), CUDA3 deliberately left at 11 layers + the head: it is the
+  card that respawned the lane on `mtp: round capture: out of memory`.  Side benefit: CUDA1's expert coverage rises from
+  3959/7680 = 51.5 % to 4194/6144 = 68.3 % (CUDA2 62.4 % -> 68.3 %), so the arm was not a coin flip.
+- **The verdict: it evened out and achieved nothing.**
+
+| arm | 131K cold prefill (steady) | busy 0/1/3/4 % | prefill energy kJ | decode4 agg (per-stream) | decode4 W | decode1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| shipped `9,24,37` | 38.2 / 38.6 s | 51 / 81 / 70 / 58 | 3.4 5.1 4.6 3.9 (17.1) | 79.2 (20.2 20.4 20.2 20.0) | 73 69 69 73 (284) | 63.9 |
+| rebalanced `13,25,37` | 45.3 / 39.3 s | 71 / 66 / 61 / 65 | 4.6 4.0 4.5 3.8 (17.0) | 81.6 (20.9 20.8 20.5 20.9) | 83 78 88 93 (342) | 65.2 |
+
+  Decode "gains" (+3 % agg, +2 % single) sit inside the 5-10 % box drift and cost **+20 % power for the same 2.10 kJ of
+  decode energy**; prefill got slower at depth.  The geometry stays `9,24,37`.
+- **Why the energy ledger settles it.**  One 131K cold prefill costs 17.0-17.1 kJ in *both* geometries; the rebalance only
+  moved joules between cards (5.15 -> 4.01 on CUDA1, 3.42 -> 4.68 on CUDA0).  With a fixed amount of work behind a serial
+  feed, levelling the consumers cannot raise the rate - the wall is upstream of compute: the single prompt read (H.31) and
+  expert streaming.  Corroborating it directly: **two 53K cold prefills concurrently took 54.4 s, the same two serially
+  38.2 s** (-30 % aggregate PP), and 42 % of their ticks had exactly one card moving.  Prefill does not parallelise across
+  cards; it contends.
+- **The mechanism behind the contention, found in the same pass.**  `detail::numa_slice_ranges`
+  (`src/core/expert_source.cpp:184`) cuts every complement slot at `role_bytes[r] / 2`: **half of every expert blob is
+  placed on node 0 and the other half on node 8**, whichever card asks for it - a stream pays cross-socket reads by
+  construction, not by accident.  Both boots still log `NUMA placement FAILED: slice 0 has 91.3-91.6 % of its pages on
+  node 0 (< 95 %)`, and the same line shows the spill cause: node 0 had 2.19 GiB free against node 8's 68.67 GiB.  The fix
+  is a code change on the dev lane: cut at expert-slot (block) boundaries with a per-node weight instead of mid-blob
+  halves, so a card's expert range lives on its own node.  That is the standing weighted-slice ticket, now with a named
+  function, a mechanism and an expected metric (per-card remote-read share, the placement gate passing).
+- **Not forgotten (and not believed either).**  At 53K the rebalance arm looked *better*: 17.2 + 17.5 s serial against
+  19.1 + 19.1 s, and the concurrency penalty fell 1.42x -> 1.06x.  The shipped arm's 53K pair ran while the lane was
+  flushing 48 GiB of idle conversation saves to disk, so the two arms are not paired at that depth.  Anyone who wants the
+  53K verdict must re-run both in one boot with the disk tier quiesced.
+- **Handback.**  Default production boot restored (health 200, self-reported `layers 0-8 ... one hand-off per window`),
+  `qualgate check lane4` + `lanecheck 4` re-run on the restored boot, no experiment flags in the process environment.
+
 ### H.32 - the lane's real deep-window concurrency curve, and a shape reversal I had to take back (11-23 07:4x-08:5x, 4-card)
 
 - **What this was.**  The operator reported the 4-card lane "nearly unusable" and watched one card (`GPU1`)
@@ -1544,3 +1596,14 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
     same protocol: 40.7 vs 145.6 tok/s aggregate, because the operator's own sessions were reading during the
     first one.  Quiet the lane, or log the concurrent request census beside every number and throw the
     contaminated samples away rather than explaining them.
+24. Rebalancing the load is not removing the bottleneck.  Making the four stages' duty cycles equal
+    (81/70/58/51 % -> 66/61/65/71 %) changed the wall time by nothing and the energy by +20 %, because
+    the work of one request was the same 17.1 kJ either way.  Before spending GPU-hours on a distribution
+    fix, prove which quantity you are moving: integrate the invariant (joules per prefill, bytes per
+    window) across arms.  If it is flat, the bottleneck is upstream of the thing you are spreading.
+25. Two toolchain traps that each cost a dead arm.  (a) `base64 -i f | ssh host 'base64 -d > f && run &'`:
+    the `&&` list is backgrounded *inside* the remote shell, so the decode writes a zero-byte file while
+    the launcher happily starts against it; `python3 -c 'ast.parse(open(f).read())'` on an empty file
+    passes, and the arm fails with no error.  Upload and launch in two separate ssh invocations.
+    (b) The remote syntax gate must be `python3.11 -m py_compile`, not `ast.parse` - the latter accepts
+    `flush=True()` (calling a bool), which py_compile warns on and the interpreter dies on.

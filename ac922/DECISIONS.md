@@ -770,3 +770,38 @@ unusable regardless of tuning.
 2. Server side: `max_queue` (config key or `--max-queue`, `serve/server.py:5242`; capacity = batch + max_queue)
    so the 5th+ request waits a bounded time or gets a clean 503/"retry later" instead of joining a full line.
    Not adopted by default because it changes what the client sees (retries/503s) - operator's call.
+
+
+## Rejected: time-balancing the layer split (`13,25,37`) - the joules moved, the wall did not (2026-11-23, 4 cards)
+
+The shipped 4-card split `9,24,37` gives CUDA1 fifteen of forty-eight layers against CUDA0's nine, and the
+operator saw one card at 91 % SM while three idled.  The obvious fix is to even the stages out.  It was
+measured (DEVLOG H.33, 200 ms sampler over util/power/clocks, lane idle before each phase, two boots):
+
+| arm | 131K cold prefill | busy 0/1/3/4 % | prefill kJ | decode4 agg (per-stream) | decode4 W | decode1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| shipped `9,24,37` | 38.2 / 38.6 s | 51/81/70/58 | 3.4 5.1 4.6 3.9 (**17.1**) | 79.2 (20.2/20.4/20.2/20.0) | 284 | 63.9 |
+| rebalanced `13,25,37` | 45.3 / 39.3 s | 71/66/61/65 | 4.6 4.0 4.5 3.8 (**17.0**) | 81.6 (20.5-20.9) | **342 (+20 %)** | 65.2 |
+
+**Rejected.**  Duty cycles evened out exactly as intended and nothing else moved.  Decode deltas (+3 % agg,
++2 % single) are inside the box's 5-10 % boot drift, and they were paid for with +20 % decode power for the
+*same* 2.10 kJ of decode energy; deep prefill got slower.  The ledger is the argument: one cold 131K
+prefill costs 17.0-17.1 kJ in either geometry - the rebalance only carried joules between cards (CUDA1
+5.15 -> 4.01, CUDA0 3.42 -> 4.68) - so with a fixed amount of work behind a serial feed, levelling the
+consumers cannot raise the rate.
+
+**Why the imbalance is not the wall.**  A layer split is a pipeline, not a pool: each card holds only its
+own layers (`--trim-stage-weights`), the cross-card expert tier (`--peer-device`) is incompatible with
+`--layer-split`, and decode's window time is the *sum* of the four stages.  Prefill does not parallelise
+across cards either - two 53K cold reads concurrently took 54.4 s against 38.2 s serially (-30 % aggregate
+PP), with 42 % of ticks showing exactly one card moving.  The real limits are upstream of compute: the
+single prompt read (H.31), expert streaming, and the mid-blob NUMA split in `numa_slice_ranges`
+(`src/core/expert_source.cpp:184`) that puts half of every expert blob on the far node by construction.
+
+**Kept anyway.**  CUDA3 stays at 11 layers + the head and its 837 MiB MTP draft - that is the card which
+respawned the lane on `mtp: round capture: out of memory`, so it is the one stage deliberately not fattened.
+
+**Not believed, and cheap to settle.**  At 53K the rebalance looked better (17.2 + 17.5 s vs 19.1 + 19.1;
+concurrency penalty 1.42x -> 1.06x), but the shipped arm ran there while the lane was saving 48 GiB of idle
+conversations to disk, so the pair is contaminated.  A 53K verdict needs both arms in one boot with the disk
+tier quiesced - filed, low priority behind the NUMA slice ticket.

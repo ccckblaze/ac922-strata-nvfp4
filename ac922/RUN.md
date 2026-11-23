@@ -114,6 +114,21 @@ before any boot-over-boot comparison: `decodetiming_watch.py`-style parsing over
 boot's log ended.  Standalone: `bash ac922/scripts/lanearchive.sh` (archives the live boot "mid-way"
 - the window then ends at the archive moment).
 
+## Per-card work census (is an imbalance costing wall time, or only joules?)
+
+`ac922/scripts/workcensus-arm.sh <layer-split> <nonce>` boots the lane with that split, drives fixed
+phases (idle -> two concurrent mid-window cold prefills -> the same two serially -> four deep cold
+prefills -> four-way decode -> single-stream decode) while sampling util/power/clocks at 200 ms, and
+`workcensus-sum.py <nonce>` reports per-card busy %, util %, power, **integrated joules above the
+idle floor**, and a per-phase co-busy histogram.  ~100 s boot plus ~8 min of measurement; it drives
+traffic, so the lane must be quiet and the disk cold tier quiesced.
+
+Read the energy column before believing any rebalance.  The shipped `9,24,37` and a time-balanced
+`13,25,37` each cost 17.0-17.1 kJ per cold 131K prefill: duty cycles evened out, wall time did not
+move, and decode drew +20 % power for the same 2.10 kJ of work.  Also do not read `utilization.gpu`
+as work - 4-way decode shows 78-85 % busy at 22-38 % util and 284 W for the whole box, because a
+layer split is a pipeline whose window time is the *sum* of its stages.
+
 ## Development lane on the leftover cards (requires operator authorization)
 
 Once the pinned lane holds the 4-card geometry (the shipped default `0,1,3,4` — two cards per
