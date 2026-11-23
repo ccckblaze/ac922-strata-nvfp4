@@ -700,7 +700,10 @@ Supervised smoke of the bumped engine (`0.2.15-nvfp4.2`, `strata 0.1.61`) on car
   four cards' compute is pooled at all.  Two things had to be separated: a *structural* property of a layer split
   (nothing to fix) and a *load imbalance* (possibly fixable).  Both boots were measured with a 200 ms sampler over
   `utilization.gpu`, `power.draw` and `clocks.sm` (`/tmp/mix2.py` + `/tmp/mix2sum.py`, nonce `q4` = shipped geometry,
-  `b1` = the rebalance arm), on a lane confirmed idle (load 0.02) before each phase.
+  `b1` = the rebalance arm), on a lane confirmed idle (load 0.02) before each phase.  During the experiment that
+  harness was scratch (`/tmp/mix2.py`, `/tmp/mix2sum.py`, `/root/arm.sh`); it has since been productised as
+  `ac922/scripts/workcensus.py` + `workcensus-sum.py` + `workcensus-arm.sh` (RUN.md, "Per-card work census"), so
+  every number below is reproducible from this repo by one nonce per arm.
 - **Structural, first, so it is on the record.**  A split is a pipeline, not a pool: the boot says
   `layers 0-8 (CUDA0), 9-23 (CUDA1), 24-36 (CUDA2), 37-47 (CUDA3), one hand-off per window`, each card holds only its own
   layers' dense weights (`--trim-stage-weights`), and the only cross-card expert tier the engine has (`--peer-device`) is
