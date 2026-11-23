@@ -296,7 +296,12 @@ def med(vals):
 # multiplier (H.35 correction, 2026-11-23).
 CENSUS = re.compile(
     r"batch \(pipelined, (\d+) groups of (\d+)\): (\d+) group-steps, (\d+) rows in ([\d.]+) ms"
-    r"(?:[^\n]*?\((\d+) of (\d+) MTP proposals kept))?")
+    r"(?:[^\n]*?\((\d+) of (\d+) MTP proposals kept\))?")
+assert CENSUS.search(
+    "strata batch (pipelined, 4 groups of 1): 3193 group-steps, 5390 rows in 71271 ms = 75.6 rows/s "
+    "(admissions included); adaptive tier (STRATA_PIPE_ADAPT_EVERY): 321 rounds, 1209 experts swapped in, "
+    "2906 ms (2197 of 3186 MTP proposals kept)").groups() == ("4", "1", "3193", "5390", "71271",
+                                                              "2197", "3186")
 
 
 def tail_census():
@@ -328,7 +333,8 @@ def tail_census():
     return {"cen_lines": lines, "cen_shape": shape, "cen_steps": int(steps), "cen_rows": int(rows),
             "cen_ms": int(ms), "cen_step_ms": round(ms / steps, 1),
             "cen_rows_step": round(rows / steps, 2), "cen_rows_s": round(1000.0 * rows / ms, 1),
-            "cen_group_rate": round(1000.0 * steps / ms / max(1, groups * (rows and 1)), 1),
+            "cen_step_rate": round(1000.0 * steps / ms, 1),
+            "cen_slot_rate": round(1000.0 * steps / ms / max(1, groups), 1),
             "cen_mtp_keep": round(kept / total, 3) if total else None}
 
 
