@@ -187,9 +187,13 @@ if len(c["gpu"]) != 4 or "STRATA_LAYER_SPLIT" in os.environ:
         c["layer_split"] = sp; setflag("--layer-split", sp)
 ncard=len(c["gpu"])
 if batch<2 and groups<2 and ncard in (4,6):
-    # 4-card shape is 4 groups of 1 row (2026-11-21 sweep, runbook 337): on 4 stages the
-    # 2-groups-of-2 pipeline leaves bubbles and its agg wall loses +4~8% to 4x1 at 8-98K with
-    # single streams unharmed; on 6 cards 3x2 stays the winner (deeper rows-per-group sharing).
+    # 4-card shape stays 4 groups of 1 row.  Re-confirmed 2026-11-23 against 4/2 with a harness of four
+    # INDEPENDENT ~53K/131K sessions (the traffic the operator actually runs; the 2026-11-21 sweep used a
+    # shared-prefix aggbench, which answers a different question): aggregate tok/s n=4 - 8K 145.6 (4/4) vs
+    # 121.0 (4/2), 131K 81.8 vs 72.7; single stream identical (53K 66.1 vs 65.9).  4/2 keeps PIPED_MTP with
+    # 2 rows/window and still loses: on 4 stages the multi-row QSA scoring costs more than the shared
+    # expert read saves.  Lesson H.32: one 4/4 sample read 40.7 at 53K - live traffic was on the lane;
+    # contention, not shape.  6-card stays 6/3.
     batch,groups=(4,4) if ncard==4 else (6,3)
     print("auto batch shape for %d cards: %d/%d" % (ncard,batch,groups))
 if batch>=2: setflag("--batch",batch)
