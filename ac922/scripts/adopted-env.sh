@@ -24,6 +24,13 @@ export STRATA_BATCH_SELF_COMMIT=${STRATA_BATCH_SELF_COMMIT:-0}
 # Rates (PP/TG tok/s) and every byte of the numeric path are untouched.  Raise the cap to move more
 # traffic into the fast lane; 0 turns the policy off (upstream default).
 export STRATA_ADMIT_SHORT_FIRST=${STRATA_ADMIT_SHORT_FIRST:-8192}
+# >>> AC922 adopted env (production decode-window observation) >>>
+# One stderr line per batched window: expert/host-reach/CPU ms split, drafts accepted N of M.
+# Pure counters - no diagnostic kernels, no extra syncs (upstream anatomy doc, 2026-11-22).
+# The 22nd anatomy run used this exact setting in production; steady-state overhead measured flat.
+# Lane discipline: every production boot log is archived with its boot config (runbook 356 handback).
+export STRATA_DECODE_TIMING=${STRATA_DECODE_TIMING:-1}
+# <<< AC922 adopted env (production decode-window observation) <<<
 # <<< AC922 adopted env <<<
 # >>> AC922 adopted env (DECISIONS.md: prefill chunk ceiling) >>>
 # `--prefill auto` sizes the chunk from what every expert cache can lend at boot, and with the cold
