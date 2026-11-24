@@ -306,8 +306,12 @@ PY
   # not a split".  The A/B is this lane's first honest measurement of that question.
   if [ -n "${STRATA_AUTO_NEW_MTP:-}" ]; then export STRATA_AUTO_NEW_MTP; fi
   # <<< AC922 adopted env (factory draft arm) <<<
-  ( cd "$SRC" && setsid /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port 8091 >"$LOG" 2>&1 & echo $! > "$PIDF" )
-  echo "started pid $(cat $PIDF)"
+  # The new session leader writes its own pid: `setsid` forks when the caller is already a
+  # process-group leader, so `$!` can name the short-lived setsid parent instead of the server
+  # (measured 2026-11-24: pidfile held the script's pid, not the serve pid).
+  ( cd "$SRC" && setsid /usr/bin/bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$PIDF" /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port 8091 >"$LOG" 2>&1 & )
+  for _ in $(seq 1 20); do [ -s "$PIDF" ] && break; sleep 0.2; done
+  echo "started pid $(cat $PIDF 2>/dev/null)"
 }
 status(){
   echo "== server pid =="; [ -f "$PIDF" ] && cat "$PIDF" && ps -o pid,etime,rss,cmd -p "$(cat $PIDF)" 2>/dev/null | tail -1
