@@ -280,7 +280,12 @@ PY
   # by bash, which both holds caller pipes open and records the wrapper pid, not serve's).
   # Close stdin, send the wrapper's own fds to the bit bucket, then resolve serve's real pid
   # from the unique --config path.
-  ( cd "$SRC" && setsid $NA /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port "$DEV_PORT" </dev/null >"$LOG" 2>&1 & ) >/dev/null 2>&1
+  # Bind: same shape as the prod lane - the server answers on every address, the firewall gates
+  # sources and STRATA_API_KEY gates endpoints, so there is no LAN front door holding :8092 open.
+  # 0.0.0.0 keeps the loopback status/health probe working while also binding the routable NIC;
+  # DEV_BIND_HOST overrides for a host-only lane.
+  DEV_BIND_HOST=${DEV_BIND_HOST:-0.0.0.0}
+  ( cd "$SRC" && setsid $NA /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host "$DEV_BIND_HOST" --port "$DEV_PORT" </dev/null >"$LOG" 2>&1 & ) >/dev/null 2>&1
   sleep 2
   local sp; sp=$(pgrep -f "serve.server --engine strata --config $RUN" | head -1)
   [ -n "$sp" ] && echo "$sp" > "$PIDF"
