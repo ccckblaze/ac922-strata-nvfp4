@@ -309,7 +309,13 @@ PY
   # The new session leader writes its own pid: `setsid` forks when the caller is already a
   # process-group leader, so `$!` can name the short-lived setsid parent instead of the server
   # (measured 2026-11-24: pidfile held the script's pid, not the serve pid).
-  ( cd "$SRC" && setsid /usr/bin/bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$PIDF" /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host 127.0.0.1 --port 8091 >"$LOG" 2>&1 & )
+  # Bind: the server answers on every address, so the LAN front door
+  # (ac922-strata-lan-proxy.service) is retired and this holds :8091 outright. 0.0.0.0 is on
+  # purpose, not the NIC address: `status`/`health` probe 127.0.0.1:8091, and a loopback-only
+  # bind left the routable address to the pump. The key still gates every endpoint but /health,
+  # and the firewall decides which sources may arrive; BIND_HOST overrides for a test lane.
+  BIND_HOST=${BIND_HOST:-0.0.0.0}
+  ( cd "$SRC" && setsid /usr/bin/bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$PIDF" /usr/bin/python3.11 -m serve.server --engine strata --config "$RUN" --host "$BIND_HOST" --port 8091 >"$LOG" 2>&1 & )
   for _ in $(seq 1 20); do [ -s "$PIDF" ] && break; sleep 0.2; done
   echo "started pid $(cat $PIDF 2>/dev/null)"
 }
